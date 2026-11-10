@@ -16,10 +16,16 @@
     [[NSJSONSerialization dataWithJSONObject:self.evidence options:NSJSONWritingPrettyPrinted error:nil]writeToURL:url atomically:YES];
 }
 - (void)testUserTypingForIndependentAgent {
+    [self typeLines:24];
+}
+- (void)testUserTypingForLiveCarPlay {
+    [self typeLines:160];
+}
+- (void)typeLines:(int)lines {
     self.evidence=[NSMutableArray new];self.continueAfterFailure=NO;
     XCUIApplication *pad=[[XCUIApplication alloc]initWithBundleIdentifier:@"local.axlab.TypingPad"];
     [pad launch];XCUIElement *editor=pad.textViews[@"user.editor"];XCTAssertTrue([editor waitForExistenceWithTimeout:5]);[editor tap];
-    NSMutableString *expected=[NSMutableString new];for(int i=0;i<24;i++)[expected appendFormat:@"Parallel typing %02d: abcdefghijklmnopqrstuvwxyz 0123456789.\n",i];
+    NSMutableString *expected=[NSMutableString new];for(int i=0;i<lines;i++)[expected appendFormat:@"Parallel typing %02d: abcdefghijklmnopqrstuvwxyz 0123456789.\n",i];
     [self emit:@"display.typingInterval" info:@{@"stage":@"start",@"length":@(expected.length)}];[self save];
     [editor typeText:expected];
     [self emit:@"display.typingInterval" info:@{@"stage":@"end",@"length":@(expected.length)}];

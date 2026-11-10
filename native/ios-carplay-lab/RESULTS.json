@@ -1,31 +1,81 @@
 {
-  "runtime": "Xcode 26.2 / iOS 26.2 Simulator",
-  "target": "original Simulator MobileSafari",
-  "actualTestStarted": true,
-  "searchQueryTypedDuringUserTyping": true,
-  "imagesPageLoadedDuringUserTyping": true,
-  "overlappingNativeGestures": 3,
-  "userTextLength": 1416,
-  "userTextExact": true,
-  "userFocusAtEnd": true,
-  "userActiveAtEnd": 1,
-  "userInterruptionEvents": 0,
-  "approachSucceeded": true,
-  "realDeviceVerified": false,
-  "arbitraryInstalledAppsVerified": false,
+  "environment": "Xcode 26.2 / iOS 26.2 (23C52) / iPhone 17 Pro Simulator",
+  "sameSimulatorDevice": true,
+  "model": {
+    "provider": "OpenRouter",
+    "id": "deepseek/deepseek-v4.1-flash-1017",
+    "loop": "original Poki iOS ChatModel / PiLoop / ModelKeys",
+    "hostAgentLoop": false
+  },
+  "typing": {
+    "characters": 9500,
+    "durationSeconds": 158.29730200767517,
+    "exact": true,
+    "foregroundOrFocusInterruptions": 0,
+    "focusAtEnd": true,
+    "foregroundAtEnd": true
+  },
+  "modelTasks": [
+    {
+      "task": "Safari image search and scroll",
+      "success": true,
+      "toolCalls": 11,
+      "seconds": 34.951496839523315,
+      "completedDuringTyping": true
+    },
+    {
+      "task": "Photos image viewer, Settings About and switch back",
+      "success": true,
+      "toolCalls": 11,
+      "seconds": 28.818210124969482,
+      "completedDuringTyping": true
+    }
+  ],
+  "apps": [
+    {
+      "bundle": "com.apple.mobilesafari",
+      "coldStartedDuringTyping": true,
+      "nativeGesturesDuringTyping": 4,
+      "nativeTextInsertionsDuringTyping": 1,
+      "outcome": "Pikachu forest wallpaper image grid loaded, scrolled 0 -> 692"
+    },
+    {
+      "bundle": "com.apple.mobileslideshow",
+      "coldStartedDuringTyping": true,
+      "nativeGesturesDuringTyping": 1,
+      "nativeTextInsertionsDuringTyping": 0,
+      "outcome": "Seeded Pikachu collage opened in real Photos viewer; preserved after return"
+    },
+    {
+      "bundle": "com.apple.Preferences",
+      "coldStartedDuringTyping": true,
+      "nativeGesturesDuringTyping": 2,
+      "nativeTextInsertionsDuringTyping": 0,
+      "outcome": "General > About opened; iOS 26.2 visually verified"
+    }
+  ],
+  "coldSwitchRepeat": {
+    "sequence": [
+      "Safari",
+      "Photos",
+      "Settings",
+      "Safari"
+    ],
+    "allObserved": true,
+    "characters": 1416,
+    "seconds": 23.5621280670166,
+    "exact": true,
+    "interruptions": 0
+  },
+  "selectedUnitTests": {
+    "count": 3,
+    "failures": 0
+  },
+  "physicalDeviceVerified": false,
+  "arbitraryAppCompatibilityVerified": false,
   "chineseUserIMEVerified": false,
-  "userTypingDurationSeconds": 23.54880714416504,
-  "scrollOffsetBefore": "{0, 0}",
-  "scrollOffsetAfter": "{0, 692}",
-  "executor": "deterministic adaptive driver, not an LLM run",
-  "targetScenePreparedBeforeTyping": true,
-  "originalSafariBinarySHA256": "65fcdb30b82aef3a163c67650d0fdf2373fc7ab18e1be10319e75dacc5c7437c",
-  "originalSafariBinaryHashUnchanged": true,
-  "packagedSourceRepeat": {
-    "approachSucceeded": true,
-    "userTextLength": 1416,
-    "userTextExact": true,
-    "userInterruptionEvents": 0,
-    "typingDurationSeconds": 23.56192111968994
-  }
+  "photosLibrary": "9 images; 6 stock Simulator photos plus 3 test screenshots, including a Pikachu collage",
+  "userEditor": "independent TypingPad fixture, not Apple Notes",
+  "visualReview": true,
+  "sourceSafariBinarySHA256": "65fcdb30b82aef3a163c67650d0fdf2373fc7ab18e1be10319e75dacc5c7437c"
 }

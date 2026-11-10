@@ -40,6 +40,37 @@ final class ChatHarnessTests: XCTestCase {
         String(decoding: try! JSONSerialization.data(withJSONObject: object), as: UTF8.self)
     }
 
+    #if DEBUG && targetEnvironment(simulator)
+    /// An isolated model cannot open an unprepared app by falling back to the
+    /// whole-phone runner. Exercise the real ChatModel/backend dispatch.
+    func testCarPlayRejectsUnpreparedAppsWithoutForegroundFallback() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+        try Data(Self.json(["targets": [:]]).utf8).write(to: path)
+        let prior = ProcessInfo.processInfo.environment["POKI_CARPLAY_CONFIG"]
+        setenv("POKI_CARPLAY_CONFIG", path.path, 1)
+        defer {
+            if let prior { setenv("POKI_CARPLAY_CONFIG", prior, 1) } else { unsetenv("POKI_CARPLAY_CONFIG") }
+            try? FileManager.default.removeItem(at: path)
+        }
+        let server = try FakeCompletions(replies: [
+            FakeCompletions.tool("carplay_open", ["bundle": "com.apple.Preferences"]),
+            FakeCompletions.tool("finish_task", ["success": false, "summary": "Unsupported global action blocked."]),
+            FakeCompletions.text("Stopped without foreground control.")
+        ])
+        let chat = chat(on: server)
+        chat.setCarPlay(true)
+        let result = await chat.runDelegated("Open an unprepared app.")
+        XCTAssertEqual(result.success, false, result.text)
+        XCTAssertTrue(chat.calls.contains { $0.name == "carplay_open" && !$0.ok && $0.answer.contains("not in the prepared CarPlay allowlist") })
+        let first = try XCTUnwrap(server.requests.first)
+        let tools = first["tools"] as? [[String: Any]] ?? []
+        let names = tools.compactMap { ($0["function"] as? [String: Any])?["name"] as? String }
+        XCTAssertTrue(names.contains("carplay_open"))
+        XCTAssertFalse(names.contains("do"))
+        XCTAssertFalse(names.contains("container_do"))
+    }
+    #endif
+
     /// A note the agent saved during one task reaches the model with the next task of the same
     /// conversation.
     func testEachTaskTellsTheModelWhatMemoryHolds() async throws {

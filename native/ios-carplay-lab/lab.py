@@ -38,6 +38,7 @@ parser.add_argument('action', choices=('prepare', 'launch'))
 parser.add_argument('--device', required=True, help='dedicated, booted Simulator UUID')
 parser.add_argument('--case', choices=('fixture', 'safari'), default='safari')
 parser.add_argument('--bundle', help='override target; compatibility is unverified')
+parser.add_argument('--allow', nargs='+', help='explicit installed bundle allowlist for cold launch/switch tests')
 args = parser.parse_args()
 device = args.device
 bundle = args.bundle or ('com.apple.mobilesafari' if args.case == 'safari'
@@ -69,7 +70,19 @@ if args.action == 'prepare':
         run(['xcrun', 'simctl', 'install', device, str(products / app)])
     coordinator = ROOT / 'coordinator'
     coordinator.mkdir(exist_ok=True)
-    atomic(coordinator / 'allowlist.json', [bundle])
+    allowed = args.allow or [bundle]
+    targets = {}
+    for bid in allowed:
+        output(['xcrun', 'simctl', 'get_app_container', device, bid, 'app'])
+        data = Path(output(['xcrun', 'simctl', 'get_app_container', device, bid, 'data']))
+        # Some Apple system apps are uncontained: simctl returns literal '(null)'.
+        # Give those processes an explicit, private lab IPC directory instead.
+        directory = data / 'Documents/SceneBridge' if data.is_absolute() else coordinator / 'targets' / bid
+        directory.mkdir(parents=True, exist_ok=True)
+        targets[bid] = str(directory)
+    atomic(coordinator / 'allowlist.json', allowed)
+    atomic(coordinator / 'runtime.json', {'bridge': str(build / 'SceneBridge.dylib'), 'targets': targets})
+    atomic(ROOT / 'client-config.json', {'coordinator': str(coordinator), 'targets': targets})
     # A stale launch request must not run during a service restart.
     if (coordinator / 'launch.json').exists():
         (coordinator / 'launch.json').rename(coordinator / ('previous-' + str(uuid.uuid4()) + '.json'))
@@ -80,12 +93,13 @@ if args.action == 'prepare':
          '-DCOORDINATOR_DIR=' + json.dumps(str(coordinator)), '-dynamiclib',
          str(ROOT / 'CarPlayCoordinator.m'), '-o', str(dylib)])
     run(['codesign', '--force', '--sign', '-', str(dylib)])
-    for service in ('com.apple.CarPlayApp', 'com.apple.SpringBoard'):
+    for service in ('com.apple.SpringBoard', 'com.apple.CarPlayApp'):
         run(['xcrun', 'simctl', 'spawn', device, 'launchctl', 'debug',
              'user/foreground/' + service, '--environment',
              'DYLD_INSERT_LIBRARIES=' + str(dylib)])
-    run(['xcrun', 'simctl', 'spawn', device, 'launchctl', 'kickstart', '-k',
-         'user/foreground/com.apple.SpringBoard'])
+        run(['xcrun', 'simctl', 'spawn', device, 'launchctl', 'kickstart', '-k',
+             'user/foreground/' + service])
+        time.sleep(3)
     atomic(ROOT / '.lab-state.json', {'device': device, 'bundle': bundle,
            'bridge': str(build / 'SceneBridge.dylib'), 'coordinator': str(dylib)})
     print('Prepared. In Simulator: I/O > External Displays > CarPlay. '

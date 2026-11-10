@@ -1,6 +1,7 @@
 *-path.txt
 *.log
 .lab-state.json
+client-config.json
 coordinator/
 evidence/
 driver/*.xcodeproj/

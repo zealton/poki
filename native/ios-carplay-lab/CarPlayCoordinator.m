@@ -12,6 +12,8 @@ static NSMutableArray *trace;
 static NSMutableDictionary *originals;
 static NSMutableDictionary *pinned;
 static __weak id workspace;
+static Class environmentClass;
+static id ExecutionEnvironment(id self,SEL cmd);
 static NSArray *AllowedIdentifiers(void) {
     static NSArray *ids;static dispatch_once_t once;
     dispatch_once(&once,^{
@@ -48,6 +50,22 @@ static BOOL Hook(Class cls,SEL s,IMP next) {
     Trace(@"hook.installed",@{@"class":@(class_getName(cls)),@"selector":NSStringFromSelector(s)});return YES;
 }
 static IMP Original(Class cls,SEL s) {return [originals[[NSString stringWithFormat:@"%s/%@",class_getName(cls),NSStringFromSelector(s)]]pointerValue];}
+// SpringBoard supplies the environment when CarPlay cold-launches an app.
+// The Simulator loader permits this injection; this is not a device entitlement.
+static id ExecutionEnvironment(id self,SEL cmd) {
+    id original=((id(*)(id,SEL))Original(environmentClass,cmd))(self,cmd);
+    id identity=Get(self,@"identity");NSString *bid=Get(identity,@"embeddedApplicationIdentifier")?:Get(identity,@"applicationIdentifier")?:Get(identity,@"bundleIdentifier");
+    if(!Allowed(bid))return original;
+    NSData *data=[NSData dataWithContentsOfFile:[@COORDINATOR_DIR stringByAppendingPathComponent:@"runtime.json"]];
+    NSDictionary *config=data?[NSJSONSerialization JSONObjectWithData:data options:0 error:nil]:nil;
+    NSString *bridge=config[@"bridge"];
+    if(![bridge isKindOfClass:NSString.class]||![NSFileManager.defaultManager fileExistsAtPath:bridge])return original;
+    NSMutableDictionary *env=[original mutableCopy]?:[NSMutableDictionary new];
+    NSString *previous=env[@"DYLD_INSERT_LIBRARIES"];
+    if(![[previous componentsSeparatedByString:@":"]containsObject:bridge])env[@"DYLD_INSERT_LIBRARIES"]=previous.length?[previous stringByAppendingFormat:@":%@",bridge]:bridge;
+    NSString *directory=config[@"targets"][bid];if([directory isKindOfClass:NSString.class])env[@"POKI_SCENE_BRIDGE_DIRECTORY"]=directory;
+    Trace(@"launch.environment",@{@"bundle":bid});return env;
+}
 
 @interface AdmissionValues : NSProxy
 @property(strong) id source;
@@ -160,7 +178,7 @@ static void PollLaunch(void) {
         id req=[NSClassFromString(@"DBMutableWorkspaceStateChangeRequest")new];SEL activate=NSSelectorFromString(@"activateApplication:"),change=NSSelectorFromString(@"requestStateChange:");
         if(![req respondsToSelector:activate]||![workspace respondsToSelector:change]){Trace(@"launch.missingAPI",nil);return;}
         ((void(*)(id,SEL,id))objc_msgSend)(req,activate,app);((void(*)(id,SEL,id))objc_msgSend)(workspace,change,req);
-        Trace(@"launch.requested",@{@"bundle":bid});
+        Trace(@"launch.requested",@{@"bundle":bid,@"id":rid});
     } @catch(NSException *e){Trace(@"launch.exception",@{@"error":e.description});}
 }
 static void Install(void) {
@@ -176,6 +194,12 @@ static void Install(void) {
     Hook(NSClassFromString(@"LSBundleProxy"),NSSelectorFromString(@"objectForInfoDictionaryKey:ofClass:"),(IMP)InfoValue);
     Hook(NSClassFromString(@"FBSApplicationLibrary"),NSSelectorFromString(@"allInstalledApplications"),(IMP)InstalledApps);
     Hook(NSClassFromString(@"DBWorkspace"),NSSelectorFromString(@"initWithOwner:"),(IMP)WorkspaceInit);
+    if(!environmentClass) {
+        Class c=NSClassFromString(@"FBProcessExecutionContext");
+        if(class_getInstanceMethod(c,@selector(environment))) {
+            environmentClass=c;Hook(c,@selector(environment),(IMP)ExecutionEnvironment);
+        }
+    }
     Class db=NSClassFromString(@"DBApplication");if(db)class_addMethod(db,@selector(forwardingTargetForSelector:),(IMP)ForwardInfo,"@@::");
 }
 __attribute__((constructor)) static void Start(void) {

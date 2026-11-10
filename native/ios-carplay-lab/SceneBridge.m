@@ -7,13 +7,15 @@
 
 static BOOL silentFocus=YES;
 static NSURL *BridgeURL(NSString *name) {
-    NSURL *dir=[[[NSFileManager defaultManager]URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject URLByAppendingPathComponent:@"SceneBridge"];
+    const char *configured=getenv("POKI_SCENE_BRIDGE_DIRECTORY");
+    NSURL *dir=configured?[[NSURL alloc]initFileURLWithPath:@(configured) isDirectory:YES]:[[[NSFileManager defaultManager]URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject URLByAppendingPathComponent:@"SceneBridge"];
     [NSFileManager.defaultManager createDirectoryAtURL:dir withIntermediateDirectories:YES attributes:nil error:nil];
     return [dir URLByAppendingPathComponent:name];
 }
 static void WriteJSON(id object,NSString *name) {
     NSData *d=[NSJSONSerialization dataWithJSONObject:object options:NSJSONWritingPrettyPrinted error:nil];
-    [d writeToURL:BridgeURL(name) atomically:YES];
+    NSError *error=nil;[d writeToURL:BridgeURL(name) options:NSDataWritingAtomic error:&error];
+    static BOOL reported=NO;if(error&&!reported){reported=YES;NSLog(@"[PokiSceneBridge] Transport write failed: %@",error);}
 }
 static NSMutableArray *bridgeEvents;
 static void Trace(NSString *event,NSDictionary *info) {
@@ -122,7 +124,7 @@ static void Tick(void) {
     UIWindow *w=ExternalWindow();NSMutableArray *rows=[NSMutableArray new];
     @try {if(w)Flatten(w,w,rows);}
     @catch(NSException *e){Trace(@"observation.exception",@{@"error":e.name});}
-    WriteJSON(@{@"at":@([NSDate date].timeIntervalSince1970),@"window":w?NSStringFromClass(w.class):@"none",@"screenBounds":w?NSStringFromCGRect(w.screen.bounds):@"",@"windowBounds":w?NSStringFromCGRect(w.bounds):@"",@"scene":w.windowScene.session.persistentIdentifier?:@"",@"localKeyWindow":@(w.isKeyWindow),@"applicationState":@(UIApplication.sharedApplication.applicationState),@"sceneState":w?@(w.windowScene.activationState):@(-1),@"silentFocus":@(silentFocus),@"views":rows},@"state.json");
+    WriteJSON(@{@"at":@([NSDate date].timeIntervalSince1970),@"pid":@(getpid()),@"bundle":NSBundle.mainBundle.bundleIdentifier?:@"",@"window":w?NSStringFromClass(w.class):@"none",@"screenBounds":w?NSStringFromCGRect(w.screen.bounds):@"",@"windowBounds":w?NSStringFromCGRect(w.bounds):@"",@"scene":w.windowScene.session.persistentIdentifier?:@"",@"localKeyWindow":@(w.isKeyWindow),@"applicationState":@(UIApplication.sharedApplication.applicationState),@"sceneState":w?@(w.windowScene.activationState):@(-1),@"silentFocus":@(silentFocus),@"views":rows},@"state.json");
     static NSString *lastID;
     NSDictionary *command=[NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfURL:BridgeURL(@"command.json")]?:[NSData data] options:0 error:nil];
     NSString *cid=command[@"id"];
@@ -180,6 +182,7 @@ static UIUserInterfaceIdiom BridgeIdiom(id self,SEL cmd) {
 }
 __attribute__((constructor)) static void Install(void) {
     @autoreleasepool {
+        Trace(@"bridge.loaded",@{@"bundle":NSBundle.mainBundle.bundleIdentifier?:@"",@"pid":@(getpid())});
         Method role=class_getInstanceMethod(UISceneSession.class,@selector(role));
         Method config=class_getInstanceMethod(UISceneConfiguration.class,@selector(initWithName:sessionRole:));
         originalRole=(void *)method_setImplementation(role,(IMP)BridgeRole);

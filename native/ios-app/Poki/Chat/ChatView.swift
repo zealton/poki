@@ -30,6 +30,14 @@ struct ChatView: View {
         // the keyboard (or the home indicator) and the bubbles scroll under both, as in Messages.
         .safeAreaInset(edge: .top, spacing: 0) {
             if chat.containedSafari { ContainedSafariPreview().frame(height: 250) }
+            if chat.carPlay, let image = CarPlayWorkspace.shared.preview {
+                VStack(spacing: 4) {
+                    Image(uiImage: image).resizable().scaledToFit().frame(height: 220)
+                        .accessibilityLabel("Agent's CarPlay display")
+                    Text("CarPlay preview").font(.caption).foregroundStyle(.secondary)
+                }.frame(maxWidth: .infinity).padding(.vertical, 6)
+                    .background(Color(uiColor: .secondarySystemBackground))
+            }
             if voice.isOn { LiveVoiceBar(voice: voice).transition(.move(edge: .top).combined(with: .opacity)) }
         }
         .animation(.snappy, value: voice.isOn)
@@ -56,6 +64,11 @@ struct ChatView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
+                    if chat.carPlayAvailable || chat.carPlay {
+                        Button(chat.carPlay ? "Use whole iPhone" : "CarPlay display (experimental)") {
+                            chat.setCarPlay(!chat.carPlay)
+                        }.disabled(chat.running)
+                    }
                     Button(chat.containedSafari ? "Use whole iPhone" : "Isolated Safari (experimental)") {
                         chat.setContainedSafari(!chat.containedSafari)
                     }.disabled(chat.running || (!chat.containedSafari && !chat.containedAvailable))
@@ -95,7 +108,7 @@ struct ChatView: View {
 
     /// Setup is not finished (nothing paired yet, or a step left after pairing, such as UI Automation):
     /// the chat says so, one tap from setup, as the old Home's Setup row did.
-    private var needsSetup: Bool { !chat.containedSafari && (model.pairingPath == nil || model.setupStepsLeft) && !model.sessionOn && !chat.running && !chat.isSample }
+    private var needsSetup: Bool { !chat.containedSafari && !chat.carPlay && (model.pairingPath == nil || model.setupStepsLeft) && !model.sessionOn && !chat.running && !chat.isSample }
 }
 
 /// The bubbles of one conversation: an in-app chat, a hand-off from an outside agent, or an outside

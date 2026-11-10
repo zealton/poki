@@ -78,6 +78,7 @@ final class InProcessProbe: ObservableObject {
             case "chat": await chatCycle(model: model)
             case "chat-openrouter": await chatCycle(model: model, liveOpenRouter: true)
             #if DEBUG && targetEnvironment(simulator)
+            case "carplay": await carPlayAcceptance(model: model)
             case "contained": await containedCycle(model:model)
             case "interactive":
                 // Simulator-only setup for testing the normal chat UI. The phone tools and model
@@ -97,6 +98,46 @@ final class InProcessProbe: ObservableObject {
     }
 
     #if DEBUG && targetEnvironment(simulator)
+    /// Starts tasks in the original ChatModel after the independent editor is
+    /// already typing. Never opens the global XCTest automation session.
+    private func carPlayAcceptance(model: AppModel) async {
+        guard let chat = AskPoki.chat else { return }
+        let ownsBackground = !model.background.isOn
+        if ownsBackground { model.background.start() }
+        defer { if ownsBackground && !model.sessionOn { model.background.stop() } }
+        endInteractiveGrant()
+        interactiveGrant = UIApplication.shared.beginBackgroundTask(withName: "CarPlay acceptance") { [weak self] in
+            Task { @MainActor in self?.endInteractiveGrant() }
+        }
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("carplay-acceptance")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var last = ""
+        for _ in 0..<3600 {
+            guard interactiveGrant != .invalid else { return }
+            if let data = try? Data(contentsOf: dir.appendingPathComponent("request.json")),
+               let request = (try? JSONSerialization.jsonObject(with: data)) as? [String: String],
+               let id = request["id"], id != last, let task = request["task"], ModelKeys.hasKey(.openrouter) {
+                last = id
+                ModelKeys.selectedProvider = .openrouter
+                chat.newConversation(); chat.setCarPlay(true)
+                let started = Date().timeIntervalSince1970
+                var record: TaskRecord?
+                let previous = ChatModel.afterTask
+                ChatModel.afterTask = { value in record = value; previous?(value) }
+                chat.send(task)
+                while chat.running { try? await Task.sleep(for: .milliseconds(100)) }
+                ChatModel.afterTask = previous
+                let receipt: [String: Any] = ["id": id, "started": started, "ended": Date().timeIntervalSince1970,
+                                            "text": record?.result?.summary ?? "No finish_task result.", "success": record?.result?.success as Any? ?? NSNull(),
+                                            "calls": chat.calls.map { ["name": $0.name, "arguments": $0.arguments, "answer": $0.answer, "ok": $0.ok] as [String: Any] }]
+                if let bytes = try? JSONSerialization.data(withJSONObject: receipt, options: [.prettyPrinted, .sortedKeys]) {
+                    try? bytes.write(to: dir.appendingPathComponent(id + ".json"), options: .atomic)
+                }
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+    }
+
     /// Uses only the contained scene transport, never initializes global XCTest automation.
     private func containedCycle(model:AppModel) async {
         let host = PKContainedWorkspace.shared()
