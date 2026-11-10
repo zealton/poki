@@ -149,7 +149,7 @@ build(['xcrun', '--sdk', sdk, 'clang', '-target', target, '-isysroot',
        output(['xcrun', '--sdk', sdk, '--show-sdk-path']), '-fobjc-arc', '-dynamiclib',
        '-I', ROOT / 'Shared', ROOT / 'GuestBridge/GuestBridge.m', ROOT / 'Shared/WorkspaceIPC.m',
        ROOT / 'Shared/WorkspacePolicy.m', '-framework', 'UIKit', '-framework', 'Foundation',
-       '-framework', 'QuartzCore', '-framework', 'CoreGraphics',
+       '-framework', 'QuartzCore', '-framework', 'CoreGraphics', '-framework', 'WebKit',
        '-o', resources / 'WorkspaceBridge.dylib'], 'bridge-build.log')
 run(['codesign', '--force', '--sign', '-', resources / 'WorkspaceBridge.dylib'])
 run(['xattr', '-cr', app])

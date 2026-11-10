@@ -3,6 +3,7 @@
 #import "WorkspacePolicy.h"
 #import <objc/runtime.h>
 #import <QuartzCore/QuartzCore.h>
+#import <WebKit/WebKit.h>
 
 static UIWindow *GuestWindow(void) {
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes)
@@ -33,6 +34,15 @@ static void Paint(CALayer *layer) {
     for (CALayer *child in layer.sublayers)
         Paint(child);
 }
+static WKWebView *GuestWeb(UIView *v, UIWindow *w) {
+    if(v.hidden || v.alpha<.01 || !CGRectIntersectsRect([v convertRect:v.bounds toView:w],w.bounds))return nil;
+    WKWebView *best=[v isKindOfClass:WKWebView.class] ? (id)v : nil;
+    for(UIView *child in v.subviews) {
+        WKWebView *next=GuestWeb(child,w);
+        if(next && (!best || next.bounds.size.width*next.bounds.size.height>best.bounds.size.width*best.bounds.size.height))best=next;
+    }
+    return best;
+}
 static UIView *ControlAt(UIWindow *w, CGPoint point, BOOL scrolling) {
     UIView *v = [w hitTest:point withEvent:nil];
     while (v && v != w) {
@@ -49,6 +59,8 @@ static UIView *ControlAt(UIWindow *w, CGPoint point, BOOL scrolling) {
 @property int hostPID, workerPID;
 @property NSString *runID, *observationID;
 @property BOOL enabled;
+@property BOOL strictIsolation;
+@property WKWebView *observedWeb;
 @property NSMutableDictionary *targets;
 @property NSArray *labels;
 @property NSMutableArray<NSXPCConnection *> *connections;
@@ -59,6 +71,7 @@ static UIView *ControlAt(UIWindow *w, CGPoint point, BOOL scrolling) {
     if ((self = [super init])) {
         NSDictionary *b = [NSClassFromString(@"LiveProcessHandler") retrievedAppInfo];
         self.hostPID = [b[@"pokiHostPID"] intValue];
+        self.strictIsolation=[b[@"pokiStrictIsolation"] boolValue];
         self.connections = [NSMutableArray new];
         self.listener = [NSXPCListener anonymousListener];
         self.listener.delegate = self;
@@ -81,7 +94,7 @@ static UIView *ControlAt(UIWindow *w, CGPoint point, BOOL scrolling) {
         return NO;
     c.exportedInterface = PKWInterface(@protocol(PKWGuest));
     c.exportedObject = self;
-    if (pid == self.workerPID)
+    if (pid == self.workerPID || pid == self.hostPID)
         c.remoteObjectInterface = PKWInterface(@protocol(PKWGuestEvents));
     [self.connections addObject:c];
     [c resume];
@@ -172,8 +185,7 @@ static UIView *ControlAt(UIWindow *w, CGPoint point, BOOL scrolling) {
             imageWithActions:^(UIGraphicsImageRendererContext *c) {
                 [w.layer renderInContext:c.CGContext];
             }];
-        reply(
-            @{
+        NSMutableDictionary *observation=[@{
                 @"observation" : self.observationID,
                 @"width" : @(w.bounds.size.width),
                 @"height" : @(w.bounds.size.height),
@@ -181,8 +193,62 @@ static UIView *ControlAt(UIWindow *w, CGPoint point, BOOL scrolling) {
                 @"bundle" : NSBundle.mainBundle.bundleIdentifier ?: @"",
                 @"pid" : @(NSProcessInfo.processInfo.processIdentifier),
                 @"capture" : @"guest-calayer"
-            },
-            UIImageJPEGRepresentation(image, .65));
+            } mutableCopy];
+        observation[@"applicationClass"]=NSStringFromClass(UIApplication.sharedApplication.class);
+        self.observedWeb=GuestWeb(w,w);
+        WKWebView *web=self.observedWeb;
+        if(self.strictIsolation) NSLog(@"PokiContained observe: UIKit rendered; web=%d",web!=nil);
+        if(!web){observation[@"web"]=@{@"available":@NO};reply(observation,UIImageJPEGRepresentation(image,.65));return;}
+        NSString *script=@"(()=>{const es=[...document.querySelectorAll('a,button,input:not([type=password]),textarea,select')].filter(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0&&r.bottom>0&&r.top<innerHeight}).slice(0,90);return {url:location.href,title:document.title,text:document.body.innerText.slice(0,7000),controls:es.map((e,i)=>{e.setAttribute('data-poki-target','p'+i);let r=e.getBoundingClientRect();return {id:'p'+i,tag:e.tagName,label:(e.innerText||e.getAttribute('aria-label')||e.placeholder||'').slice(0,160),value:e.type==='password'?'':(e.value||'').slice(0,150),href:e.href||'',x:r.x,y:r.y,width:r.width,height:r.height}}),images:[...document.images].filter(e=>e.complete&&e.naturalWidth>0).map(e=>({alt:e.alt,width:e.naturalWidth,height:e.naturalHeight})).slice(0,30)}})()";
+        [web evaluateJavaScript:script completionHandler:^(id dom,NSError *error){
+            if(self.strictIsolation) NSLog(@"PokiContained observe: DOM returned; error=%d",error!=nil);
+            observation[@"web"]= [dom isKindOfClass:NSDictionary.class] ? dom : @{@"error":@"web_dom_not_ready",@"url":web.URL.absoluteString?:@""};
+            WKSnapshotConfiguration *config=[WKSnapshotConfiguration new];config.afterScreenUpdates=NO;config.rect=web.bounds;config.snapshotWidth=@(web.bounds.size.width);
+            __block BOOL snapshotFinished=NO;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW,5*NSEC_PER_SEC),dispatch_get_main_queue(),^{
+                if(snapshotFinished)return;snapshotFinished=YES;
+                observation[@"error"]=@"real_web_snapshot_timed_out";observation[@"capture"]=@"guest-calayer-without-web-pixels";
+                reply(observation,UIImageJPEGRepresentation(image,.65));
+            });
+            [web takeSnapshotWithConfiguration:config completionHandler:^(UIImage *webImage,NSError *snapshotError){
+                if(snapshotFinished)return;snapshotFinished=YES;
+                if(self.strictIsolation) NSLog(@"PokiContained observe: snapshot returned; pixels=%d error=%d",webImage!=nil,snapshotError!=nil);
+                UIImage *combined=image;
+                if(webImage){
+                    CGRect rect=[web convertRect:web.bounds toView:w];
+                    combined=[[[UIGraphicsImageRenderer alloc] initWithSize:w.bounds.size format:format] imageWithActions:^(UIGraphicsImageRendererContext *c){[image drawAtPoint:CGPointZero];[webImage drawInRect:rect];}];
+                    observation[@"capture"]=@"guest-calayer+real-WKWebView-snapshot";
+                } else observation[@"webSnapshotError"]=@"WebKit did not return independent pixels";
+                reply(observation,UIImageJPEGRepresentation(combined,.75));
+            }];
+        }];
+    });
+}
+- (void)web:(NSDictionary *)action run:(NSString *)run observation:(NSString *)observation reply:(void (^)(NSDictionary *))reply {
+    int caller=NSXPCConnection.currentConnection.processIdentifier;
+    dispatch_async(dispatch_get_main_queue(),^{
+        if(caller!=self.workerPID || !self.enabled || ![run isEqual:self.runID]){reply(@{@"error":@"run_revoked"});return;}
+        if(![observation isEqual:self.observationID] || !self.observedWeb){reply(@{@"error":@"fresh_web_observation_required"});return;}
+        NSString *kind=action[@"action"],*script=nil;
+        if([kind isEqual:@"web_scroll"]) {
+            NSNumber *dy=action[@"dy"];
+            if(![dy isKindOfClass:NSNumber.class] || fabs(dy.doubleValue)>2000){reply(@{@"error":@"invalid_scroll"});return;}
+            script=[NSString stringWithFormat:@"window.scrollBy(0,%f);true",dy.doubleValue];
+        } else if([@[@"web_click",@"web_fill"] containsObject:kind]) {
+            NSString *target=action[@"target"];
+            if(![target isKindOfClass:NSString.class] || ![target hasPrefix:@"p"] || target.length>6){reply(@{@"error":@"invalid_web_target"});return;}
+            NSCharacterSet *digits=NSCharacterSet.decimalDigitCharacterSet;
+            if([[target substringFromIndex:1] rangeOfCharacterFromSet:digits.invertedSet].location!=NSNotFound){reply(@{@"error":@"invalid_web_target"});return;}
+            if([kind isEqual:@"web_click"])script=[NSString stringWithFormat:@"(()=>{let e=document.querySelector('[data-poki-target=%@]');if(!e||e.disabled||e.type==='password')return {error:'unsupported'};e.click();return {ok:true}})()",target];
+            else {
+                NSString *text=action[@"text"];
+                if(![text isKindOfClass:NSString.class] || text.length>2000){reply(@{@"error":@"invalid_web_text"});return;}
+                NSString *quoted=[[NSString alloc] initWithData:[NSJSONSerialization dataWithJSONObject:@[text] options:0 error:nil] encoding:NSUTF8StringEncoding];
+                script=[NSString stringWithFormat:@"(()=>{let e=document.querySelector('[data-poki-target=%@]');if(!e||e.disabled||e.readOnly||e.type==='password'||!['INPUT','TEXTAREA'].includes(e.tagName))return {error:'unsupported'};Object.getOwnPropertyDescriptor(e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set.call(e,(%@)[0]);e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));return {ok:true}})()",target,quoted];
+            }
+        } else {reply(@{@"error":@"unsupported_web_action"});return;}
+        self.observationID=nil;
+        [self.observedWeb evaluateJavaScript:script completionHandler:^(id value,NSError *error){reply(error?@{@"error":@"web_action_failed"}:([value isKindOfClass:NSDictionary.class] && value[@"error"] ? value : @{@"ok":@YES,@"result":value?:NSNull.null,@"pid":@(getpid())}));}];
     });
 }
 - (void)perform:(NSDictionary *)action
@@ -241,8 +307,11 @@ static UIView *ControlAt(UIWindow *w, CGPoint point, BOOL scrolling) {
             reply(@{@"approval_required" : @YES, @"label" : ViewLabel(v)});
             return;
         }
-        if ([kind isEqual:@"tap"] && [v isKindOfClass:UIControl.class])
-            [(UIControl *)v sendActionsForControlEvents:UIControlEventTouchUpInside];
+        if ([kind isEqual:@"tap"] && [v isKindOfClass:UIControl.class]) {
+            UIControl *control=(id)v;
+            UIControlEvents event=(control.allControlEvents & UIControlEventPrimaryActionTriggered) ? UIControlEventPrimaryActionTriggered : UIControlEventTouchUpInside;
+            [control sendActionsForControlEvents:event];
+        }
         else if ([kind isEqual:@"set_text"] && [v isKindOfClass:UITextField.class]) {
             UITextField *f = (id)v;
             f.text = a[@"text"];
@@ -312,31 +381,31 @@ static void GuestSendEvent(UIApplication *app, SEL selector, UIEvent *event) {
 }
 static BOOL (*oldResponder)(id, SEL);
 static BOOL NoAgentResponder(id object, SEL selector) {
-    if (bridge.enabled)
+    if (bridge.enabled || bridge.strictIsolation)
         return NO;
     return oldResponder(object, selector);
 }
 static BOOL (*oldFieldResponder)(id, SEL);
 static BOOL NoFieldResponder(id object, SEL selector) {
-    if (bridge.enabled)
+    if (bridge.enabled || bridge.strictIsolation)
         return NO;
     return oldFieldResponder(object, selector);
 }
 static BOOL (*oldTextResponder)(id, SEL);
 static BOOL NoTextResponder(id object, SEL selector) {
-    if (bridge.enabled)
+    if (bridge.enabled || bridge.strictIsolation)
         return NO;
     return oldTextResponder(object, selector);
 }
 static void (*oldMakeKey)(id, SEL);
 static void NoAgentKeyWindow(UIWindow *window, SEL selector) {
-    if (bridge.enabled)
+    if (bridge.enabled || bridge.strictIsolation)
         return;
     oldMakeKey(window, selector);
 }
 static void (*oldMakeVisible)(id, SEL);
 static void NoAgentVisibleKeyWindow(UIWindow *window, SEL selector) {
-    if (bridge.enabled) {
+    if (bridge.enabled || bridge.strictIsolation) {
         window.hidden = NO;
         return;
     }
@@ -345,7 +414,7 @@ static void NoAgentVisibleKeyWindow(UIWindow *window, SEL selector) {
 static void (*oldOpenURL)(id, SEL, NSURL *, NSDictionary *, void (^)(BOOL));
 static void ContainedOpenURL(id object, SEL selector, NSURL *url, NSDictionary *options,
                              void (^reply)(BOOL)) {
-    if (bridge.enabled) {
+    if (bridge.enabled || bridge.strictIsolation) {
         [bridge blockIsolation:@"客体请求打开其他 App，Agent 已暂停"];
         if (reply)
             reply(NO);
@@ -355,7 +424,7 @@ static void ContainedOpenURL(id object, SEL selector, NSURL *url, NSDictionary *
 }
 static BOOL (*oldLegacyURL)(id, SEL, NSURL *);
 static BOOL ContainedLegacyURL(id object, SEL selector, NSURL *url) {
-    if (bridge.enabled) {
+    if (bridge.enabled || bridge.strictIsolation) {
         [bridge blockIsolation:@"客体请求打开其他 App，Agent 已暂停"];
         return NO;
     }
@@ -367,7 +436,7 @@ static void ContainedSceneActivation(id object, SEL selector, UISceneSession *sc
                                      NSUserActivity *activity,
                                      UISceneActivationRequestOptions *options,
                                      void (^reply)(NSError *)) {
-    if (bridge.enabled) {
+    if (bridge.enabled || bridge.strictIsolation) {
         [bridge blockIsolation:@"客体请求切换系统窗口，Agent 已暂停"];
         if (reply)
             reply(PKWError(@"owner_required_for_scene_activation"));

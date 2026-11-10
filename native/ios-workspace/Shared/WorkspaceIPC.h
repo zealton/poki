@@ -10,6 +10,8 @@
 @end
 @protocol PKWGuest
 - (void)observe:(void (^)(NSDictionary *observation, NSData *jpeg))reply;
+- (void)web:(NSDictionary *)action run:(NSString *)run observation:(NSString *)observation
+      reply:(void (^)(NSDictionary *result))reply;
 - (void)authorizeWorker:(int)pid run:(NSString *)run reply:(void (^)(BOOL))reply;
 - (void)setRun:(NSString *)run enabled:(BOOL)enabled reply:(void (^)(BOOL))reply;
 - (void)perform:(NSDictionary *)action

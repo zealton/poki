@@ -78,6 +78,7 @@ final class InProcessProbe: ObservableObject {
             case "chat": await chatCycle(model: model)
             case "chat-openrouter": await chatCycle(model: model, liveOpenRouter: true)
             #if DEBUG && targetEnvironment(simulator)
+            case "contained": await containedCycle(model:model)
             case "interactive":
                 // Simulator-only setup for testing the normal chat UI. The phone tools and model
                 // remain Poki's production implementations; there is no scripted task or reply.
@@ -94,6 +95,33 @@ final class InProcessProbe: ObservableObject {
             }
         }
     }
+
+    #if DEBUG && targetEnvironment(simulator)
+    /// Uses only the contained scene transport, never initializes global XCTest automation.
+    private func containedCycle(model:AppModel) async {
+        let host = PKContainedWorkspace.shared()
+        let ownsBackground = !model.background.isOn
+        if ownsBackground { model.background.start() }
+        defer { host.stop(); if ownsBackground && !model.sessionOn { model.background.stop() } }
+        let directory = FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("contained-probe")
+        try? FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
+        for i in 0..<8 {
+            try? await Task.sleep(for:.seconds(4))
+            let result: ([AnyHashable:Any],Data?) = await withCheckedContinuation { c in host.observe { c.resume(returning:($0,$1)) } }
+            var value = result.0
+            value["hostActive"] = UIApplication.shared.applicationState == .active
+            value["backgroundKeeperOn"] = model.background.isOn
+            value["at"] = Date().timeIntervalSince1970
+            if let bytes = try? JSONSerialization.data(withJSONObject:value,options:[.prettyPrinted,.sortedKeys]) { try? bytes.write(to:directory.appendingPathComponent("look-\(i).json")) }
+            try? result.1?.write(to:directory.appendingPathComponent("look-\(i).jpg"))
+            if i == 0 {
+                let action:[String:Any] = ["action":"navigate","url":"https://example.com"]
+                let answer = await withCheckedContinuation { c in host.perform(action) { c.resume(returning:$0) } }
+                if let bytes=try? JSONSerialization.data(withJSONObject:answer,options:.prettyPrinted) { try? bytes.write(to:directory.appendingPathComponent("navigate.json")) }
+            }
+        }
+    }
+    #endif
 
     func prepareOnly() async {
         guard begin("prepare") else { return }

@@ -7,6 +7,8 @@ NSXPCInterface *PKWInterface(Protocol *protocol) {
         NSString.class, NSNumber.class, NSData.class, NSNull.class
     ]];
     if (protocol == @protocol(PKWGuest)) {
+        [i setClasses:classes forSelector:@selector(web:run:observation:reply:) argumentIndex:0 ofReply:NO];
+        [i setClasses:classes forSelector:@selector(web:run:observation:reply:) argumentIndex:0 ofReply:YES];
         [i setClasses:classes forSelector:@selector(observe:) argumentIndex:0 ofReply:YES];
         [i setClasses:classes
               forSelector:@selector(perform:run:observation:approval:reply:)

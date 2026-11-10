@@ -74,6 +74,24 @@ final class ChatModel {
     /// The model's side of the conversation: pi's loop (ESP-177), or for Anthropic and OpenAI with
     /// `-chatEngine direct`, the provider's own API in its own form.
     private var loop: PiLoop?
+    private(set) var containedSafari = false
+    private var loopContained = false
+    private var usingContained = false
+    private var ownsContainedBackground = false
+    private var interruption: NSObjectProtocol?
+
+    var containedAvailable: Bool { PKContainedWorkspace.shared().available }
+    func setContainedSafari(_ enabled: Bool) {
+        guard !running, !enabled || containedAvailable else { return }
+        newConversation()
+        PKContainedWorkspace.shared().stop()
+        containedSafari = enabled
+    }
+    private func endContainedRun() {
+        PKContainedWorkspace.shared().stop()
+        if ownsContainedBackground && !app.sessionOn { app.background.stop() }
+        ownsContainedBackground = false
+    }
     /// For the log's line at the end of each task: when it began, the tool calls, finish_task's verdict.
     private var taskStart = Date()
     private var toolCalls = 0
@@ -95,6 +113,12 @@ final class ChatModel {
         if let sessionID { self.sessionID = sessionID }
         self.kind = kind
         self.requester = requester
+        #if DEBUG && targetEnvironment(simulator)
+        containedSafari = UserDefaults.standard.bool(forKey: "pokiContainedSafari") && PKContainedWorkspace.shared().available
+        #endif
+        interruption = NotificationCenter.default.addObserver(forName: NSNotification.Name("PokiContainedUserInterruption"), object:nil, queue:.main) { [weak self] _ in
+            Task { @MainActor in if self?.usingContained == true { self?.stop() } }
+        }
         app.addShellObserver { [weak self] event in self?.observe(event) }
         if kind == .handoff { return }
         // A live voice conversation is part of this chat: what was said and done stays in its history.
@@ -226,12 +250,18 @@ final class ChatModel {
             let id = sessionID
             Task { if let name = await SessionNamer.name(for: text, provider: provider, model: piModel) { SessionStore.shared.setAutoName(id, name) } }
         }
+        usingContained = containedSafari
+        if usingContained {
+            guard containedAvailable else { add(.note(.problem("Safari container unavailable."))); return }
+            ownsContainedBackground = !app.background.isOn
+            if ownsContainedBackground { app.background.start() }
+        }
         running = true
         awaitingModel = true
         stopAsked = false
         planID = nil; noteID = nil; modelPlan = nil
-        let instructions = Harness.instructions(for: text)
-        if Self.direct, provider == .anthropic || provider == .openai {
+        let instructions = usingContained ? ContainedHarness.instructions : Harness.instructions(for: text)
+        if !usingContained && Self.direct && (provider == .anthropic || provider == .openai) {
             // Another model starts a new conversation on the model's side; the chat on screen stays.
             if client?.signature != "\(provider.rawValue)/\(model)" {
                 client = provider == .openai ? OpenAIClient(key: key, model: model) : AnthropicClient(key: key, model: model)
@@ -248,14 +278,17 @@ final class ChatModel {
             return
         }
         guard let piModel = provider.piModel(model) else {
+            if usingContained { endContainedRun() }
             running = false
             add(.note(.problem(String(localized: "pi has no model \(model) for \(provider.name)."))))
             return
         }
         // Another model starts a new loop that carries the conversation over.
-        if loop?.provider != provider || loop?.model.id != piModel.id {
-            loop = PiLoop(provider: provider, model: piModel, tools: Harness.tools,
-                          carrying: loop?.messages ?? []) { [weak self] call in
+        if loop?.provider != provider || loop?.model.id != piModel.id || loopContained != usingContained {
+            let carry = loopContained == usingContained ? (loop?.messages ?? []) : []
+            loopContained = usingContained
+            loop = PiLoop(provider: provider, model: piModel, tools: usingContained ? ContainedHarness.tools : Harness.tools,
+                          carrying: carry) { [weak self] call in
                 guard let self else { return PokiCore.ToolAnswer(text: "Task stopped. Action not executed.", jpeg: nil, isError: true) }
                 return await self.perform(call)
             }
@@ -327,7 +360,7 @@ final class ChatModel {
         finishPlan()
         // The turn is over: the phone goes back to the app the task began in (Poki's chat, where the
         // reply is), as a client's finish does (ESP-176). Nothing moves when it is in front already.
-        app.finishTask()
+        if usingContained { endContainedRun() } else { app.finishTask() }
         switch outcome {
         case .done: markDelivered(youID)
         case .stopped: add(.poki(String(localized: "Stopped.")))
@@ -338,6 +371,7 @@ final class ChatModel {
 
     /// Ends the task after the step under way: nothing more is sent to the phone or the model.
     func stop() {
+        if usingContained { endContainedRun() }
         guard running else { return }
         stopAsked = true
         loop?.stop()
@@ -401,6 +435,15 @@ final class ChatModel {
     private func performCall(_ call: ToolCall) async -> PokiCore.ToolAnswer {
         toolCalls += 1
         let args = (call.arguments.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) }) as? [String: Any] ?? [:]
+        if usingContained {
+            guard !stopAsked, !Task.isCancelled else { return PokiCore.ToolAnswer(text:"Task stopped.", jpeg:nil, isError:true) }
+            switch call.name {
+            case "container_look": return await ContainedHarness.look()
+            case "container_do": return await ContainedHarness.perform(args)
+            case "report_plan", "finish_task": break
+            default: return PokiCore.ToolAnswer(text:"Tool unavailable in isolated Safari mode. No foreground fallback.", jpeg:nil, isError:true)
+            }
+        }
         switch call.name {
         case "report_plan":
             guard let steps = args["steps"] as? [String], (1...8).contains(steps.count), let current = args["currentStep"] as? Int, (1...steps.count).contains(current) else {

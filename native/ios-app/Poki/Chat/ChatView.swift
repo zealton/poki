@@ -29,6 +29,7 @@ struct ChatView: View {
         // The header and the message field are insets of the conversation, so the field sits right on
         // the keyboard (or the home indicator) and the bubbles scroll under both, as in Messages.
         .safeAreaInset(edge: .top, spacing: 0) {
+            if chat.containedSafari { ContainedSafariPreview().frame(height: 250) }
             if voice.isOn { LiveVoiceBar(voice: voice).transition(.move(edge: .top).combined(with: .opacity)) }
         }
         .animation(.snappy, value: voice.isOn)
@@ -55,6 +56,9 @@ struct ChatView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
+                    Button(chat.containedSafari ? "Use whole iPhone" : "Isolated Safari (experimental)") {
+                        chat.setContainedSafari(!chat.containedSafari)
+                    }.disabled(chat.running || (!chat.containedSafari && !chat.containedAvailable))
                     Button("New Conversation", systemImage: "square.and.pencil", action: chat.newConversation).disabled(chat.running)
                     Menu("Chat Model: \(ModelKeys.selectedModelName)", systemImage: "bubble.left.and.text.bubble.right") {
                         ForEach(ModelProvider.allCases.filter { ModelAccounts.isSetUp($0) && ModelAccounts.canChat($0) }) { provider in
@@ -91,7 +95,7 @@ struct ChatView: View {
 
     /// Setup is not finished (nothing paired yet, or a step left after pairing, such as UI Automation):
     /// the chat says so, one tap from setup, as the old Home's Setup row did.
-    private var needsSetup: Bool { (model.pairingPath == nil || model.setupStepsLeft) && !model.sessionOn && !chat.running && !chat.isSample }
+    private var needsSetup: Bool { !chat.containedSafari && (model.pairingPath == nil || model.setupStepsLeft) && !model.sessionOn && !chat.running && !chat.isSample }
 }
 
 /// The bubbles of one conversation: an in-app chat, a hand-off from an outside agent, or an outside
