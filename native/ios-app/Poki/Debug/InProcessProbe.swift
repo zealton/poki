@@ -395,7 +395,20 @@ final class InProcessProbe: ObservableObject {
     func chatCycle(model: AppModel, liveOpenRouter: Bool = false) async {
         guard begin("chat with Poki's agent") else { return }
         defer { end() }
-        guard await prepare() else { return }
+        if model.automationPath == .nativeServices {
+            // NativeServicesWDA opens its own paired CoreDevice connections. Starting XCTest here
+            // would test a different permission path and could fail before the chosen transport ran.
+            guard model.pairingPath != nil else {
+                note("native services need the phone's pairing first", ["step": "chat_missing_pairing"])
+                return
+            }
+            note("using paired native services; no XCTest session", ["step": "chat_transport", "path": "native-services"])
+        } else {
+            guard await prepare() else { return }
+        }
+        let ownsNativeBackground = model.automationPath == .nativeServices && !model.background.isOn
+        if ownsNativeBackground { model.background.start() }
+        defer { if ownsNativeBackground && !model.sessionOn { model.background.stop() } }
         model.inProcessReadyForProbe()
         let background = UIApplication.shared.beginBackgroundTask(withName: "Chat probe")
         defer { UIApplication.shared.endBackgroundTask(background) }
