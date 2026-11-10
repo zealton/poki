@@ -226,6 +226,13 @@ static UIView *ControlAt(UIWindow *w, CGPoint point, BOOL scrolling) {
             reply(@{@"error" : @"target_moved"});
             return;
         }
+        if (!v.userInteractionEnabled ||
+            ([v isKindOfClass:UIControl.class] && !((UIControl *)v).enabled) ||
+            ([kind isEqual:@"set_text"] && [v isKindOfClass:UITextView.class] && !((UITextView *)v).editable) ||
+            ([kind isEqual:@"scroll"] && [v isKindOfClass:UIScrollView.class] && !((UIScrollView *)v).scrollEnabled)) {
+            reply(@{@"error":@"control_not_interactive"});
+            return;
+        }
         if (SecureInput(v)) {
             reply(@{@"error" : @"owner_must_enter_secret"});
             return;
