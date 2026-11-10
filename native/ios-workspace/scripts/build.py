@@ -58,11 +58,11 @@ if not runtime.exists():
 if output(['git', '-C', runtime, 'rev-parse', 'HEAD']) != PIN:
     raise SystemExit('Use the pinned LiveContainer revision; refusing to modify this checkout.')
 patch = ROOT / 'scripts/runtime.patch'
-reverse = subprocess.run(['git', '-C', str(runtime), 'apply', '--reverse', '--check', str(patch)],
+reverse = subprocess.run(['git', '-C', str(runtime), 'apply', '--unidiff-zero', '--reverse', '--check', str(patch)],
                          capture_output=True)
 if reverse.returncode:
-    run(['git', '-C', runtime, 'apply', '--check', patch])
-    run(['git', '-C', runtime, 'apply', patch])
+    run(['git', '-C', runtime, 'apply', '--unidiff-zero', '--check', patch])
+    run(['git', '-C', runtime, 'apply', '--unidiff-zero', patch])
 # Refuse accidental source duplicates, e.g. files created by cloud sync conflicts.
 untracked = output(['git', '-C', runtime, 'ls-files', '--others', '--exclude-standard']).splitlines()
 for name in untracked:

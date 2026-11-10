@@ -180,8 +180,15 @@
 }
 - (void)control:(NSString *)command reply:(void (^)(NSDictionary *))reply {
     dispatch_async(dispatch_get_main_queue(), ^{
+        if ([command isEqual:@"pause"] &&
+            [@[ @"idle", @"completed", @"stopped", @"failed", @"paused" ]
+                containsObject:self.phase]) {
+            reply([self state]);
+            return;
+        }
         if ([command isEqual:@"pause"] || [command isEqual:@"stop"]) {
             self.epoch++;
+            NSInteger controlEpoch = self.epoch;
             [self.request cancel];
             self.request = nil;
             self.phase = @"pausing";
@@ -191,6 +198,10 @@
                          enabled:NO
                            reply:^(BOOL accepted) {
                                dispatch_async(dispatch_get_main_queue(), ^{
+                                   if (self.epoch != controlEpoch) {
+                                       reply([self state]);
+                                       return;
+                                   }
                                    self.phase = phase;
                                    self.message =
                                        [phase isEqual:@"stopped"] ? @"任务已停止" : @"任务已暂停";
@@ -204,6 +215,7 @@
         if ([command isEqual:@"resume"] &&
             [@[ @"paused", @"awaiting_user" ] containsObject:self.phase] && self.key.length) {
             self.epoch++;
+            NSInteger controlEpoch = self.epoch;
             self.pending = nil;
             if (self.step >= self.limit)
                 self.limit = MIN(60, self.limit + 24);
@@ -212,6 +224,10 @@
                          enabled:YES
                            reply:^(BOOL accepted) {
                                dispatch_async(dispatch_get_main_queue(), ^{
+                                   if (self.epoch != controlEpoch) {
+                                       reply([self state]);
+                                       return;
+                                   }
                                    self.phase = accepted ? @"running" : @"failed";
                                    self.message =
                                        accepted ? @"重新读取当前画面" : @"客体权限已失效";
