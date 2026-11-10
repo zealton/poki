@@ -199,10 +199,6 @@ private struct AgentOperationContent: View {
                         .background(.black.opacity(0.12), in: .rect(cornerRadius: 10))
                         .clipShape(.rect(cornerRadius: 10))
                         .privacySensitive()
-                    if let at = face.snapshotAt {
-                        Text(at, format: .dateTime.hour().minute().second())
-                            .font(.system(size: 9).monospacedDigit()).foregroundStyle(.secondary)
-                    }
                 }
                 .accessibilityLabel(Text(String(activity: "Latest screen")))
             }
@@ -216,6 +212,11 @@ private struct AgentOperationContent: View {
                             Text("· \(current)/\(total)").monospacedDigit()
                         }
                         if task.active, task.thinking { Image(systemName: "ellipsis").accessibilityLabel(Text(String(activity: "Thinking"))) }
+                        if let at = face.snapshotAt {
+                            Text("·")
+                            Text(at, format: .dateTime.hour().minute().second())
+                                .font(.system(size: 9).monospacedDigit())
+                        }
                     }
                     .font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary).lineLimit(1)
                     ForEach(Array(task.steps.enumerated()), id: \.offset) { _, step in
