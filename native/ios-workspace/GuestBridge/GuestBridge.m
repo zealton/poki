@@ -15,6 +15,10 @@ static UIWindow *GuestWindow(void) {
             return w;
     return nil;
 }
+static BOOL SecureInput(UIView *view) {
+    return ([view isKindOfClass:UITextField.class] || [view isKindOfClass:UITextView.class]) &&
+           [(id<UITextInputTraits>)view isSecureTextEntry];
+}
 static NSString *ViewLabel(UIView *v) {
     if ([v isKindOfClass:UIButton.class])
         return ((UIButton *)v).currentTitle ?: v.accessibilityLabel ?: @"";
@@ -117,7 +121,7 @@ static UIView *ControlAt(UIWindow *w, CGPoint point, BOOL scrolling) {
         return;
     NSString *label = ViewLabel(v);
     BOOL editable = [v isKindOfClass:UITextField.class] || [v isKindOfClass:UITextView.class];
-    BOOL secure = [v isKindOfClass:UITextField.class] && ((UITextField *)v).secureTextEntry;
+    BOOL secure = SecureInput(v);
     if (label.length || editable || [v isKindOfClass:UIControl.class] ||
         [v isKindOfClass:UIScrollView.class]) {
         NSString *identifier = [NSString stringWithFormat:@"v%lu", (unsigned long)rows.count];
@@ -222,7 +226,7 @@ static UIView *ControlAt(UIWindow *w, CGPoint point, BOOL scrolling) {
             reply(@{@"error" : @"target_moved"});
             return;
         }
-        if ([v isKindOfClass:UITextField.class] && ((UITextField *)v).secureTextEntry) {
+        if (SecureInput(v)) {
             reply(@{@"error" : @"owner_must_enter_secret"});
             return;
         }
