@@ -30,6 +30,11 @@ struct AgentsView: View {
         NavigationStack(path: $path) {
             List {
                 Section {
+                    AgentExecutionToggle()
+                } header: {
+                    Text("Execution")
+                }
+                Section {
                     NavigationLink(value: AgentsRoute.accounts) {
                         LabeledContent {
                             Text(ModelKeys.hasUsableKey ? ModelKeys.selectedModelName : String(localized: "Add an Account")).foregroundStyle(ModelKeys.hasUsableKey ? Color.secondary : Color.orange)

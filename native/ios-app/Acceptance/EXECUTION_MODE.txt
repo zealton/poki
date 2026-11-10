@@ -1,0 +1,33 @@
+Agent background execution preference
+====================================
+
+The chat header and Agents > Execution expose the same saved switch.
+Default ON: use the prepared CarPlay workspace and its closed native tools.
+OFF: use Poki's original Harness / phone-control path and setup flow.
+The setting applies to in-app Poki text chats and ask_poki delegated tasks.
+External clients that call raw MCP look/do themselves keep their existing API.
+
+A change preserves the visible chat transcript while resetting model tool
+context. Changes are rejected while any tracked Poki task runs. Unavailable
+background execution is explained in the UI and rejected before any model
+request, with no foreground fallback. The preference is stored in UserDefaults
+and included in the existing SettingsVault allowlist. Chinese copy is included.
+The public menu no longer exposes the overlapping experimental backend choices;
+the explicit Debug LiveContainer launcher remains separate.
+
+Validation: Xcode 26.2 / iOS 26.2 Simulator, no physical device.
+- Original Poki build-for-testing succeeded.
+- 13 selected iOS tests passed: 8 ChatHarnessTests (including four new
+  preference/routing checks), 3 CarPlayTransportTests, 2 OpenRouterTests.
+- Real ChatModel/PiLoop with local FakeCompletions proved OFF -> ON -> OFF
+  switches between original and CarPlay catalogs without old mode context;
+  it preserves transcript history. This is not a live provider/model task.
+- Default ON, explicit OFF persistence, shared model instances, refusal to
+  switch during another task and unavailable-backend rejection were checked.
+- One Simulator UI test passed in Chinese: default ON, tap actual switch OFF,
+  terminate/relaunch and retain OFF, open Agents and see OFF, set ON there,
+  terminate/relaunch chat and retain ON. Screenshots were visually reviewed.
+
+The UI switch does not supply the privileges needed for CarPlay isolation.
+Stock-iPhone deployment, signing and generic third-party compatibility remain
+unverified; see native/ios-carplay-lab/README.txt for preparation and limits.

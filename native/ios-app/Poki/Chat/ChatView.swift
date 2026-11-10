@@ -29,12 +29,15 @@ struct ChatView: View {
         // The header and the message field are insets of the conversation, so the field sits right on
         // the keyboard (or the home indicator) and the bubbles scroll under both, as in Messages.
         .safeAreaInset(edge: .top, spacing: 0) {
+            AgentExecutionToggle()
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                .background(Color(uiColor: .secondarySystemBackground))
             if chat.containedSafari { ContainedSafariPreview().frame(height: 250) }
             if chat.carPlay, let image = CarPlayWorkspace.shared.preview {
                 VStack(spacing: 4) {
                     Image(uiImage: image).resizable().scaledToFit().frame(height: 220)
                         .accessibilityLabel("Agent's CarPlay display")
-                    Text("CarPlay preview").font(.caption).foregroundStyle(.secondary)
+                    Text("Agent preview").font(.caption).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity).padding(.vertical, 6)
                     .background(Color(uiColor: .secondarySystemBackground))
             }
@@ -64,14 +67,6 @@ struct ChatView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    if chat.carPlayAvailable || chat.carPlay {
-                        Button(chat.carPlay ? "Use whole iPhone" : "CarPlay display (experimental)") {
-                            chat.setCarPlay(!chat.carPlay)
-                        }.disabled(chat.running)
-                    }
-                    Button(chat.containedSafari ? "Use whole iPhone" : "Isolated Safari (experimental)") {
-                        chat.setContainedSafari(!chat.containedSafari)
-                    }.disabled(chat.running || (!chat.containedSafari && !chat.containedAvailable))
                     Button("New Conversation", systemImage: "square.and.pencil", action: chat.newConversation).disabled(chat.running)
                     Menu("Chat Model: \(ModelKeys.selectedModelName)", systemImage: "bubble.left.and.text.bubble.right") {
                         ForEach(ModelProvider.allCases.filter { ModelAccounts.isSetUp($0) && ModelAccounts.canChat($0) }) { provider in

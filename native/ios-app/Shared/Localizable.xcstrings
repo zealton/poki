@@ -1,6 +1,76 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Wait for the current task to finish before changing this." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请等待当前任务结束后再切换。"
+          }
+        }
+      }
+    },
+    "Use other apps while Poki works. You can watch its actions in the preview." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent 执行时，你可以继续使用其他 App，并在预览中查看操作效果。"
+          }
+        }
+      }
+    },
+    "Run Agent in Background" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent 后台执行"
+          }
+        }
+      }
+    },
+    "Poki uses its original mode and may switch apps or use the keyboard." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用 Poki 原来的方式，执行任务时可能切换 App 或使用键盘。"
+          }
+        }
+      }
+    },
+    "Execution" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "执行方式"
+          }
+        }
+      }
+    },
+    "Background execution is not available here yet. Turn this off to use Poki’s original mode." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前环境暂不支持后台执行。关闭此开关即可使用 Poki 原来的方式。"
+          }
+        }
+      }
+    },
+    "Agent preview" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent 操作预览"
+          }
+        }
+      }
+    },
     "%@" : {
       "localizations" : {
         "zh-Hans" : {

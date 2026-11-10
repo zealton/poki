@@ -141,8 +141,14 @@ Xcode UI/unit tests against the same Simulator during acceptance.
    Enter your own OpenRouter key at the secure terminal prompt. The helper
    passes it once through an owner-only FIFO. It never creates a key file.
    Without --provision, configure the account through Poki's normal Accounts.
-6. In the ordinary chat menu select CarPlay display (experimental), or use
-   the already-selected mode above. Send a task normally and use another app.
+6. The chat header and Agents settings share Run Agent in Background. It is
+   ON by default; ON uses this CarPlay backend and OFF uses the original Poki
+   tools. The preference survives restart and applies to new/delegated Poki
+   chats. Mode changes preserve the visible transcript but reset model tool
+   context, and are disabled while a Poki task runs. If the backend is missing,
+   ON reports that it is unavailable before any model request; it never falls
+   back to primary input. Turn it OFF explicitly to use the original setup.
+   Send a task normally and use another app.
    The debug helper also enables a bounded Debug acceptance trigger while BackgroundKeeper is on: it sends tasks
    through the same ChatModel.send after the user editor has begun typing.
 7. Automatic cold-launch/switch check (original Poki must be installed):

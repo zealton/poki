@@ -54,7 +54,9 @@ enum ChatNote: Equatable, Codable {
 @Observable
 final class ChatModel {
     private(set) var entries: [ChatEntry] = [] { didSet { persist() } }
-    private(set) var running = false
+    private(set) var running = false {
+        didSet { executionSettings.setRunning(running, task: executionID) }
+    }
     /// The model has the turn: nothing from it yet since the owner's message or the last tool answer
     /// (the chat shows the typing bubble).
     private(set) var awaitingModel = false
@@ -78,12 +80,18 @@ final class ChatModel {
     private var loopContained = false
     private var loopCarPlay = false
     private var usingCarPlay = false
-    private(set) var carPlay = false
+    private let executionSettings: AgentExecutionSettings
+    private let executionID = UUID()
+    var carPlay: Bool { executionSettings.backgroundEnabled }
+    var canChangeExecutionMode: Bool { executionSettings.canChange }
     var carPlayAvailable: Bool { CarPlayWorkspace.shared.available }
     func setCarPlay(_ enabled: Bool) {
-        guard !running, !enabled || carPlayAvailable else { return }
-        newConversation(); endIsolatedRun(); carPlay = enabled
-        if enabled { containedSafari = false }
+        guard executionSettings.setBackgroundEnabled(enabled) else { return }
+        endIsolatedRun()
+        containedSafari = false
+        // Preserve the transcript while keeping tools/context from the old mode out of the next run.
+        loop = nil
+        client = nil
     }
     private var usingContained = false
     private var ownsContainedBackground = false
@@ -91,11 +99,11 @@ final class ChatModel {
 
     var containedAvailable: Bool { PKContainedWorkspace.shared().available }
     func setContainedSafari(_ enabled: Bool) {
-        guard !running, !enabled || containedAvailable else { return }
+        guard canChangeExecutionMode, !enabled || containedAvailable else { return }
+        if enabled { executionSettings.setBackgroundEnabled(false) }
         newConversation()
         endIsolatedRun()
         containedSafari = enabled
-        if enabled { carPlay = false }
     }
     private func endIsolatedRun() {
         CarPlayWorkspace.shared.stop()
@@ -119,14 +127,20 @@ final class ChatModel {
     /// A task stops after this many model turns: a loop that goes nowhere still ends.
     static let maxTurns = 60
 
-    init(app: AppModel, kind: SavedSession.Kind = .poki, requester: String? = nil, sessionID: String? = nil) {
+    init(app: AppModel, kind: SavedSession.Kind = .poki, requester: String? = nil, sessionID: String? = nil,
+         executionSettings: AgentExecutionSettings = .shared) {
         self.app = app
+        self.executionSettings = executionSettings
         if let sessionID { self.sessionID = sessionID }
         self.kind = kind
         self.requester = requester
         #if DEBUG && targetEnvironment(simulator)
-        carPlay = UserDefaults.standard.bool(forKey: "pokiCarPlay")
-        containedSafari = !carPlay && UserDefaults.standard.bool(forKey: "pokiContainedSafari") && PKContainedWorkspace.shared().available
+        // Preserve the explicit LiveContainer lab launcher, not stale development defaults.
+        if ProcessInfo.processInfo.arguments.contains("-pokiContainedSafari"),
+           UserDefaults.standard.bool(forKey: "pokiContainedSafari"), PKContainedWorkspace.shared().available {
+            executionSettings.setBackgroundEnabled(false)
+            containedSafari = true
+        }
         #endif
         interruption = NotificationCenter.default.addObserver(forName: NSNotification.Name("PokiContainedUserInterruption"), object:nil, queue:.main) { [weak self] _ in
             Task { @MainActor in if self?.usingContained == true { self?.stop() } }
@@ -249,6 +263,12 @@ final class ChatModel {
         }
         lastOwnerText = text
         if kind == .poki { Haptics.sent() }
+        usingCarPlay = carPlay
+        usingContained = containedSafari && !carPlay
+        if usingCarPlay && !carPlayAvailable {
+            add(.note(.problem(String(localized: "Background execution is not available here yet. Turn this off to use Poki’s original mode."))))
+            return
+        }
         let provider = ModelKeys.selectedProvider
         guard provider.wired, let key = ModelKeys.key(provider) ?? (provider == .custom && ModelKeys.hasUsableKey ? "none" : nil) else {
             add(.poki(provider.signsIn ? String(localized: "Sign in to ChatGPT first: tap my picture, then Model.")
@@ -262,10 +282,7 @@ final class ChatModel {
             let id = sessionID
             Task { if let name = await SessionNamer.name(for: text, provider: provider, model: piModel) { SessionStore.shared.setAutoName(id, name) } }
         }
-        usingCarPlay = carPlay
-        usingContained = containedSafari && !carPlay
         if usingCarPlay {
-            guard carPlayAvailable else { add(.note(.problem("CarPlay backend unavailable. No foreground fallback."))); return }
             CarPlayWorkspace.shared.begin()
         }
         if usingContained || usingCarPlay {

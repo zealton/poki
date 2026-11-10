@@ -21,6 +21,44 @@
 - (void)testUserTypingForLiveCarPlay {
     [self typeLines:160];
 }
+- (void)testAgentExecutionPreferenceUI {
+    self.continueAfterFailure=NO;
+    XCUIApplication *app=[[XCUIApplication alloc]initWithBundleIdentifier:@"app.zealton.poki"];
+    NSArray *chatArgs=@[@"-pokiScreen",@"chat",@"-pokiInProcess",@"none",@"-AppleLanguages",@"(zh-Hans)",@"-AppleLocale",@"zh_CN"];
+    app.launchArguments=chatArgs;[app launch];
+    XCUIElement *toggle=app.switches[@"agent.backgroundExecution"];
+    XCTAssertTrue([toggle waitForExistenceWithTimeout:8]);
+    XCTAssertEqualObjects(toggle.value,@"1",@"A fresh installation defaults to background execution");
+    XCTAssertTrue([toggle.label containsString:@"后台执行"]);
+    [self attachScreen:@"Background default on"];
+    [self setSwitch:toggle value:@"0"];
+    XCTAssertTrue([app.staticTexts[@"agent.executionStatus"].label containsString:@"原来的方式"]);
+    [self attachScreen:@"Original mode off"];
+    [app terminate];[app launch];
+    toggle=app.switches[@"agent.backgroundExecution"];XCTAssertTrue([toggle waitForExistenceWithTimeout:8]);
+    XCTAssertEqualObjects(toggle.value,@"0",@"Off survives an app restart");
+    [app terminate];
+    app.launchArguments=@[@"-pokiScreen",@"settings",@"-pokiInProcess",@"none",@"-AppleLanguages",@"(zh-Hans)",@"-AppleLocale",@"zh_CN"];
+    [app launch];toggle=app.switches[@"agent.backgroundExecution"];
+    XCTAssertTrue([toggle waitForExistenceWithTimeout:8]);XCTAssertEqualObjects(toggle.value,@"0");
+    [self setSwitch:toggle value:@"1"];
+    [self attachScreen:@"Global setting on"];
+    [app terminate];app.launchArguments=chatArgs;[app launch];
+    toggle=app.switches[@"agent.backgroundExecution"];XCTAssertTrue([toggle waitForExistenceWithTimeout:8]);
+    XCTAssertEqualObjects(toggle.value,@"1",@"Settings and chat use the same saved preference");
+    [self attachScreen:@"Chat setting synchronized"];
+}
+- (void)setSwitch:(XCUIElement *)toggle value:(NSString *)value {
+    XCTAssertTrue(toggle.enabled);
+    // SwiftUI exposes the whole labelled row as a switch; tap its visible trailing control.
+    [[toggle coordinateWithNormalizedOffset:CGVectorMake(.94,.5)]tap];
+    XCTNSPredicateExpectation *changed=[[XCTNSPredicateExpectation alloc]initWithPredicate:[NSPredicate predicateWithFormat:@"value == %@",value] object:toggle];
+    XCTAssertEqual([XCTWaiter waitForExpectations:@[changed] timeout:3],XCTWaiterResultCompleted);
+}
+- (void)attachScreen:(NSString *)name {
+    XCTAttachment *shot=[XCTAttachment attachmentWithScreenshot:XCUIScreen.mainScreen.screenshot];
+    shot.name=name;shot.lifetime=XCTAttachmentLifetimeKeepAlways;[self addAttachment:shot];
+}
 - (void)typeLines:(int)lines {
     self.evidence=[NSMutableArray new];self.continueAfterFailure=NO;
     XCUIApplication *pad=[[XCUIApplication alloc]initWithBundleIdentifier:@"local.axlab.TypingPad"];
