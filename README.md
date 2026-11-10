@@ -13,6 +13,8 @@
   <a href="https://poki.bot">poki.bot</a>
 </p>
 
+> **Experimental fork feature:** [Poki Workspace](native/ios-workspace/README.md) runs an on-device OpenRouter agent against a separate LiveContainer guest, with a real scene preview and no global touch/keyboard injection. Simulator tests are available; physical-device and PiP acceptance are separate.
+
 <!-- badges:start -->
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0--only-blue" alt="License: AGPL-3.0-only"></a>

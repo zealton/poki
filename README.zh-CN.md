@@ -13,6 +13,8 @@
   <a href="https://poki.bot">poki.bot</a>
 </p>
 
+> **本 fork 的实验分支：** [Poki Workspace](native/ios-workspace/README.md) 使用独立 LiveContainer 客体和设备内 OpenRouter Agent，避免向系统前台发送触摸/键盘事件。Simulator 已有测试；真机与 PiP 需单独验收。
+
 <!-- badges:start -->
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0--only-blue" alt="License: AGPL-3.0-only"></a>
