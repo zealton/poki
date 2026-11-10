@@ -24,6 +24,12 @@ From the checkout, start the installer in the background and read its output as 
 node bin/install-iphone.mjs run --json
 ```
 
+For an explicitly requested custom build from this checkout, add `--ipa /absolute/path/Poki-custom.ipa`.
+Put its matching `Poki-signing.zip` beside it (the iOS packaging scripts export the entitlement
+templates). The same installer still handles signing, person stops, pairing, encrypted model-key
+transfer and checks. It hashes the IPA so a changed local build is installed again; it never
+substitutes a released IPA when this option is set. Do not pass a Simulator build as a phone IPA.
+
 Each line is one JSON event with an `at` time:
 
 - `{"event":"step","step":"install",...}` starts a step. `done` or `skipped` (with a `reason`) ends it.
