@@ -18,6 +18,9 @@ def call(argv,**kwargs):return subprocess.run(argv,check=True,env=env,**kwargs)
 def container(bundle):return Path(subprocess.check_output(['xcrun','simctl','get_app_container',device,bundle,'data'],env=env,text=True).strip())
 def read(path):return json.loads(path.read_text())
 def atomic_json(path,value):
+    if path.name=='command.json':
+        state=read(path.with_name('state.json'))
+        value={**value,'instance':state.get('instance',''),'expiresAt':time.time()+8}
     tmp=path.with_suffix('.pending');tmp.write_text(json.dumps(value,ensure_ascii=False));tmp.replace(path)
 
 target=container('com.apple.mobilesafari' if opt.case=='safari' else 'local.poki.DomainTarget')/'Documents'

@@ -113,7 +113,7 @@ final class InProcessProbe: ObservableObject {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         var last = ""
         for _ in 0..<3600 {
-            guard interactiveGrant != .invalid else { return }
+            guard model.background.isOn else { return }
             if let data = try? Data(contentsOf: dir.appendingPathComponent("request.json")),
                let request = (try? JSONSerialization.jsonObject(with: data)) as? [String: String],
                let id = request["id"], id != last, let task = request["task"], ModelKeys.hasKey(.openrouter) {

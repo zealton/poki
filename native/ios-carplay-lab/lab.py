@@ -7,6 +7,7 @@ prepare restarts its SpringBoard and CarPlay services.
 """
 import argparse
 import json
+import plistlib
 import os
 from pathlib import Path
 import subprocess
@@ -39,6 +40,7 @@ parser.add_argument('--device', required=True, help='dedicated, booted Simulator
 parser.add_argument('--case', choices=('fixture', 'safari'), default='safari')
 parser.add_argument('--bundle', help='override target; compatibility is unverified')
 parser.add_argument('--allow', nargs='+', help='explicit installed bundle allowlist for cold launch/switch tests')
+parser.add_argument('--restart', action='store_true', help='terminate only the selected target before dashboard launch')
 args = parser.parse_args()
 device = args.device
 bundle = args.bundle or ('com.apple.mobilesafari' if args.case == 'safari'
@@ -71,9 +73,11 @@ if args.action == 'prepare':
     coordinator = ROOT / 'coordinator'
     coordinator.mkdir(exist_ok=True)
     allowed = args.allow or [bundle]
-    targets = {}
+    targets = {}; apps = []
     for bid in allowed:
-        output(['xcrun', 'simctl', 'get_app_container', device, bid, 'app'])
+        app = Path(output(['xcrun', 'simctl', 'get_app_container', device, bid, 'app']))
+        info = plistlib.loads((app / 'Info.plist').read_bytes())
+        apps.append({'bundle': bid, 'name': info.get('CFBundleDisplayName', info.get('CFBundleName', bid))})
         data = Path(output(['xcrun', 'simctl', 'get_app_container', device, bid, 'data']))
         # Some Apple system apps are uncontained: simctl returns literal '(null)'.
         # Give those processes an explicit, private lab IPC directory instead.
@@ -82,7 +86,7 @@ if args.action == 'prepare':
         targets[bid] = str(directory)
     atomic(coordinator / 'allowlist.json', allowed)
     atomic(coordinator / 'runtime.json', {'bridge': str(build / 'SceneBridge.dylib'), 'targets': targets})
-    atomic(ROOT / 'client-config.json', {'coordinator': str(coordinator), 'targets': targets})
+    atomic(ROOT / 'client-config.json', {'coordinator': str(coordinator), 'targets': targets, 'apps': apps})
     # A stale launch request must not run during a service restart.
     if (coordinator / 'launch.json').exists():
         (coordinator / 'launch.json').rename(coordinator / ('previous-' + str(uuid.uuid4()) + '.json'))
@@ -107,24 +111,25 @@ if args.action == 'prepare':
           'Fixture test: 800 x 480 pixels, scale 2. Then run lab.py launch.')
 else:
     config = json.loads((ROOT / '.lab-state.json').read_text())
-    if config['device'] != device or config['bundle'] != bundle:
-        parser.error('prepare the same device and target first')
-    documents = Path(output(['xcrun', 'simctl', 'get_app_container', device, bundle, 'data'])) / 'Documents'
-    command = documents / 'SceneBridge/command.json'
+    if config['device'] != device:
+        parser.error('prepare the same device first')
+    client = json.loads((ROOT / 'client-config.json').read_text())
+    if bundle not in client['targets']:
+        parser.error('target is not in the prepared allowlist')
+    bridge_dir = Path(client['targets'][bundle])
+    command = bridge_dir / 'command.json'
     if command.exists():
         command.rename(command.with_name('previous-' + str(uuid.uuid4()) + '.json'))
-    subprocess.run(['xcrun', 'simctl', 'terminate', device, bundle],
-                   env=ENV, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    launch_env = {**ENV, 'SIMCTL_CHILD_DYLD_INSERT_LIBRARIES': config['bridge']}
-    subprocess.run(['xcrun', 'simctl', 'launch', device, bundle],
-                   check=True, env=launch_env)
-    time.sleep(1)
+    if args.restart:
+        subprocess.run(['xcrun', 'simctl', 'terminate', device, bundle],
+                       env=ENV, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    started = time.time()
     atomic(ROOT / 'coordinator/launch.json', {'id': str(uuid.uuid4()), 'bundle': bundle})
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
         try:
-            state = json.loads((documents / 'SceneBridge/state.json').read_text())
-            if state.get('window') != 'none' and state.get('at', 0) > time.time() - 2:
+            state = json.loads((bridge_dir / 'state.json').read_text())
+            if state.get('window') != 'none' and state.get('sceneState') == 0 and state.get('at', 0) > started:
                 print('Target has a live external window. Run run_parallel.py for the overlap test.')
                 break
         except (OSError, json.JSONDecodeError):

@@ -456,8 +456,13 @@ final class ChatModel {
         if usingCarPlay {
             guard !stopAsked, !Task.isCancelled else { return PokiCore.ToolAnswer(text:"Task stopped.", jpeg:nil, isError:true) }
             switch call.name {
+            case "carplay_apps": return CarPlayWorkspace.shared.listApps()
             case "carplay_open": return await CarPlayWorkspace.shared.open(args["bundle"] as? String ?? "")
             case "carplay_look": return await CarPlayWorkspace.shared.look()
+            case "carplay_press", "carplay_tap", "carplay_type":
+                var input = args
+                input["action"] = call.name == "carplay_type" ? "text" : "tap"
+                return await CarPlayWorkspace.shared.perform(input)
             case "carplay_do": return await CarPlayWorkspace.shared.perform(args)
             case "report_plan", "finish_task": break
             default: return PokiCore.ToolAnswer(text:"Tool unavailable in CarPlay mode. No foreground fallback.", jpeg:nil, isError:true)

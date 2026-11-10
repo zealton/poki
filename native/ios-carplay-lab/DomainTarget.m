@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
+#import <UserNotifications/UserNotifications.h>
 
 static NSMutableArray *events;
 static void Log(NSString *event, NSDictionary *info) {
@@ -35,6 +36,9 @@ static void Log(NSString *event, NSDictionary *info) {
     [self.field addTarget:self action:@selector(edited) forControlEvents:UIControlEventEditingChanged];[self.view addSubview:self.field];
     self.table=[[UITableView alloc]initWithFrame:CGRectMake(20,230,620,180) style:UITableViewStylePlain];
     self.table.dataSource=self;self.table.delegate=self;self.table.accessibilityIdentifier=@"domain.table";[self.view addSubview:self.table];
+    UIButton *permission=[UIButton buttonWithType:UIButtonTypeSystem];permission.frame=CGRectMake(0,0,320,40);
+    [permission setTitle:@"Notification permission check" forState:UIControlStateNormal];permission.accessibilityIdentifier=@"domain.permission";
+    [permission addTarget:self action:@selector(permissionCheck) forControlEvents:UIControlEventTouchUpInside];self.table.tableHeaderView=permission;
     [self refresh];Log(@"view.loaded",nil);
 }
 - (void)viewDidLayoutSubviews {
@@ -49,6 +53,17 @@ static void Log(NSString *event, NSDictionary *info) {
 }
 - (void)refresh {self.label.text=[NSString stringWithFormat:@"REAL COUNT: %ld",(long)self.count];}
 - (void)pressed {self.count++;[self refresh];Log(@"button.pressed",@{@"count":@(self.count)});}
+- (void)permissionCheck {
+    UNUserNotificationCenter *center=UNUserNotificationCenter.currentNotificationCenter;
+    [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings *before){
+        dispatch_async(dispatch_get_main_queue(),^{Log(@"permission.before",@{@"status":@(before.authorizationStatus)});});
+        [center requestAuthorizationWithOptions:UNAuthorizationOptionAlert completionHandler:^(BOOL granted,NSError *error){
+            [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings *after){
+                dispatch_async(dispatch_get_main_queue(),^{Log(@"permission.after",@{@"status":@(after.authorizationStatus),@"granted":@(granted),@"deferred":@([error.domain isEqual:@"PokiExternalDisplay"])});});
+            }];
+        }];
+    }];
+}
 - (void)edited {Log(@"text.changed",@{@"text":self.field.text?:@"",@"focus":@(self.field.isFirstResponder)});}
 - (void)textFieldDidBeginEditing:(UITextField *)f {Log(@"text.focus",nil);}
 - (void)textFieldDidEndEditing:(UITextField *)f {Log(@"text.blur",nil);}
@@ -84,6 +99,12 @@ static void Log(NSString *event, NSDictionary *info) {
 @implementation DomainApp
 - (BOOL)application:(UIApplication *)app didFinishLaunchingWithOptions:(NSDictionary *)o {
     Log(@"app.launch",nil);
+    // Ordinary fixture data creation; the Agent must later open it via real Files UI.
+    NSURL *samples=[[[NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject URLByAppendingPathComponent:@"Poki Samples"] URLByStandardizingPath];
+    [NSFileManager.defaultManager createDirectoryAtURL:samples withIntermediateDirectories:YES attributes:nil error:nil];
+    NSURL *sample=[samples URLByAppendingPathComponent:@"CarPlay Sample.txt"];
+    if(![NSFileManager.defaultManager fileExistsAtPath:sample.path])
+        [@"CarPlay document usability check\nVerification code: 8421\nThis is synthetic Simulator test data.\n" writeToURL:sample atomically:YES encoding:NSUTF8StringEncoding error:nil];
     @try {
         Class c=NSClassFromString(@"LSApplicationProxy");
         id proxy=((id(*)(id,SEL,id))objc_msgSend)(c,NSSelectorFromString(@"applicationProxyForIdentifier:"),NSBundle.mainBundle.bundleIdentifier);

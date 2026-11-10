@@ -54,6 +54,7 @@ static IMP Original(Class cls,SEL s) {return [originals[[NSString stringWithForm
 // The Simulator loader permits this injection; this is not a device entitlement.
 static id ExecutionEnvironment(id self,SEL cmd) {
     id original=((id(*)(id,SEL))Original(environmentClass,cmd))(self,cmd);
+    if(![NSProcessInfo.processInfo.processName isEqual:@"CarPlay"])return original;
     id identity=Get(self,@"identity");NSString *bid=Get(identity,@"embeddedApplicationIdentifier")?:Get(identity,@"applicationIdentifier")?:Get(identity,@"bundleIdentifier");
     if(!Allowed(bid))return original;
     NSData *data=[NSData dataWithContentsOfFile:[@COORDINATOR_DIR stringByAppendingPathComponent:@"runtime.json"]];
@@ -64,6 +65,7 @@ static id ExecutionEnvironment(id self,SEL cmd) {
     NSString *previous=env[@"DYLD_INSERT_LIBRARIES"];
     if(![[previous componentsSeparatedByString:@":"]containsObject:bridge])env[@"DYLD_INSERT_LIBRARIES"]=previous.length?[previous stringByAppendingFormat:@":%@",bridge]:bridge;
     NSString *directory=config[@"targets"][bid];if([directory isKindOfClass:NSString.class])env[@"POKI_SCENE_BRIDGE_DIRECTORY"]=directory;
+    env[@"POKI_CARPLAY_ISOLATED_LAUNCH"]=@"1";
     Trace(@"launch.environment",@{@"bundle":bid});return env;
 }
 
