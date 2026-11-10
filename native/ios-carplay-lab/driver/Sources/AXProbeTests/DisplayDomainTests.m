@@ -35,6 +35,7 @@
     NSLog(@"AXLAB island %@",springboard.debugDescription);
     XCUIElement *stop=springboard.buttons[@"Stop"];
     XCTAssertTrue(stop.exists);[stop tap];
+    XCTAssertTrue([[springboard.staticTexts matchingIdentifier:@"Stopped"].firstMatch waitForExistenceWithTimeout:5],@"Wait for the actual ActivityKit terminal update before capturing it");
     XCTAssertEqual(pad.state,XCUIApplicationStateRunningForeground,@"Stop must keep the owner's app in front");
     [self attachScreen:@"Agent stopped without opening Poki"];
 }
