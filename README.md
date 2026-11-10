@@ -26,6 +26,14 @@
 </p>
 <!-- badges:end -->
 
+## Experimental Poki typing panel
+
+The pre-alpha implementation bundles an automation-only **Poki is typing** keyboard,
+preferred over native keyboard simulation when available. It includes local humanized
+Chinese Pinyin/English typing, user-takeover pauses, and early observation-based learning.
+It is **not yet device-validated**. See [setup, language/IME support, the pending test
+matrix, and the hidden user-routine experiment](docs/poki-keyboard.md).
+
 ## Quick start
 
 ### Poki on your iPhone

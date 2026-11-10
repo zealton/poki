@@ -27,7 +27,12 @@ public struct RunnerError: Error, CustomStringConvertible, Sendable {
 
 /// One HTTP exchange. URLSession on the phone; a fake in tests.
 public protocol HTTPTransport: Sendable {
+    var verifiesNativeTyping: Bool { get }
     func send(method: String, url: URL, body: Data?, timeout: Double) async throws -> (status: Int, body: Data)
+}
+
+public extension HTTPTransport {
+    var verifiesNativeTyping: Bool { false }
 }
 
 public enum TransportError: Error, Sendable {
@@ -110,6 +115,7 @@ struct SnapshotLimits: Equatable, Sendable {
 public final class Runner: @unchecked Sendable {
     public let url: URL
     let transport: HTTPTransport
+    var verifiesNativeTyping: Bool { transport.verifiesNativeTyping }
     private let state = LockedBox<(session: String?, misses: Int)>((nil, 0))
     /// Called after `unhealthyAfter` silent requests in a row: at once when the runner refused or
     /// broke the connection, and only after a `GET /status` probe also went unanswered for
@@ -237,7 +243,7 @@ public final class Runner: @unchecked Sendable {
         let value = parsed["value"] ?? parsed
         if let code = value["error"]?.string {
             let message = (value["message"]?.string ?? code).split(separator: "\n").first.map(String.init) ?? code
-            throw RunnerError(message: "the runner refused \(method) \(Self.short(path)): \(message)", delivery: .notSent, status: result.status, code: code)
+            throw RunnerError(message: "the runner refused \(method) \(Self.short(path)): \(message)", delivery: code == "poki user takeover" ? .unknown : .notSent, status: result.status, code: code)
         }
         if !(200..<300).contains(result.status) {
             throw RunnerError(message: "the runner answered HTTP \(result.status) to \(method) \(Self.short(path))", delivery: .notSent, status: result.status)

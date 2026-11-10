@@ -7,5 +7,7 @@ Poki/Poki.entitlements
 Poki/PokiLocal.entitlements
 PokiWidgets/Info.plist
 PokiWidgets/PokiWidgets.entitlements
+PokiKeyboard/Info.plist
+PokiKeyboard/PokiKeyboard.entitlements
 PokiTunnel/Info.plist
 PokiTunnel/PokiTunnel.entitlements

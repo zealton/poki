@@ -107,6 +107,7 @@ targets:
         com.apple.security.application-groups: [$(POKI_APP_GROUP)]
     dependencies:
       - target: PokiWidgets
+      - target: PokiKeyboard
       - package: PokiCore
       - package: WebRTC
       - package: PiSwift
@@ -129,6 +130,35 @@ targets:
         OTHER_LDFLAGS: [-lpoki_launcher, -lc++, -framework, Security, -framework, SystemConfiguration]
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+  PokiKeyboard:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: PokiKeyboard
+      - path: Shared/KeyboardSession.swift
+    info:
+      path: PokiKeyboard/Info.plist
+      properties:
+        CFBundleDisplayName: Poki
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        PokiAppGroup: $(POKI_APP_GROUP)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.keyboard-service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).KeyboardViewController
+          NSExtensionAttributes:
+            IsASCIICapable: true
+            PrefersRightToLeft: false
+            PrimaryLanguage: en-US
+            RequestsOpenAccess: true
+    entitlements:
+      path: PokiKeyboard/PokiKeyboard.entitlements
+      properties:
+        com.apple.security.application-groups: [$(POKI_APP_GROUP)]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(POKI_BUNDLE_ID).keyboard
+        APPLICATION_EXTENSION_API_ONLY: YES
   PokiTests:
     type: bundle.unit-test
     platform: iOS

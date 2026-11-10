@@ -560,11 +560,6 @@ struct InProcessSection: View {
     @ObservedObject var probe = InProcessProbe.shared
     @AppStorage("automationPath") private var path = AutomationPath.nativeServices.rawValue
     private let running = AutomationPath.current
-    @State private var ime = NativeServicesWDA(screen: UIScreen.main.bounds.size)
-    @State private var pinyin = "nihao"
-    @State private var imeStatus = ""
-    @State private var imeBusy = false
-    @State private var imeTask: Task<Void, Never>?
 
     var body: some View {
         Section {
@@ -576,26 +571,6 @@ struct InProcessSection: View {
                 Text("Takes effect when Poki starts again.").font(.caption).foregroundStyle(.orange)
             }
             ProbeField(probe: probe).frame(height: 44)
-            DisclosureGroup("Chinese keyboard experiment") {
-                Text("Select Chinese Pinyin on the test field first. Actions wait 2 seconds so you can focus the field. Inspect the candidates before choosing; Space may insert a space if no composition is active.")
-                    .font(.caption)
-                TextField("Pinyin", text: $pinyin).textInputAutocapitalization(.never).autocorrectionDisabled()
-                Button("Compose Pinyin") { imeAction(text: pinyin) }.disabled(imeBusy)
-                Button("Switch to Chinese and verify") { imeAction(key: "next_input_source") }.disabled(imeBusy)
-                Button("Read candidate accessibility") { imeAction(read: true) }.disabled(imeBusy)
-                HStack {
-                    Button("Previous") { imeAction(key: "left") }
-                    Button("Next") { imeAction(key: "right") }
-                    Button("Choose (Space)") { imeAction(key: "space") }
-                }.disabled(imeBusy)
-                HStack {
-                    Button("More candidates") { imeAction(key: "down") }
-                    Button("Backspace") { imeAction(key: "backspace") }
-                    Button("End experiment") { imeAction(end: true) }
-                }.disabled(imeBusy)
-                Text(imeStatus).font(.caption).textSelection(.enabled)
-                Text("Composition requires Chinese as the focused test field’s active input language. This verifies Chinese, not the specific Pinyin layout. The accessibility read may include app text: review it before sharing.").font(.caption)
-            }
             HStack {
                 Button("Port 8100") { Task { await probe.portCheck() } }
                 Button("Separate session") { Task { await probe.separateTrial() } }
@@ -620,72 +595,10 @@ struct InProcessSection: View {
         } header: {
             Text("In-process automation")
         } footer: {
-            Text("Native services is an experimental banner-free path using the same paired accessibility, screenshot and HID services as the Mac/Linux bridge. PokiCore keeps the same control logic, approvals, action timing and typing cadence as the standard paths. Changes take effect when Poki starts again.")
+            Text("Native services is an experimental banner-free path using the same paired accessibility, screenshot and HID services as the Mac/Linux bridge. Agent typing uses verified keyboard input and Chinese candidate selection without the pasteboard. Changes take effect when Poki starts again.")
         }
         .onAppear {
             if path == AutomationPath.runner.rawValue { path = AutomationPath.nativeServices.rawValue }
-        }
-        .onDisappear {
-            let pending = imeTask
-            pending?.cancel()
-            Task {
-                await pending?.value
-                do { try await ime.ime(end: true) }
-                catch { imeStatus = "Keyboard detach failed: \(error.localizedDescription)" }
-                await ime.reset()
-            }
-        }
-    }
-
-    private func imeAction(text: String = "", key: String? = nil, end: Bool = false, read: Bool = false) {
-        imeBusy = true
-        imeStatus = "Focus the test field now…"
-        imeTask = Task { @MainActor in
-            defer { imeBusy = false }
-            do {
-                if !end { try await Task.sleep(for: .seconds(2)) }
-                try Task.checkCancellation()
-                if read {
-                    imeStatus = try await ime.imeAccessibilitySnapshot()
-                    return
-                }
-                if !end {
-                    guard probe.focusedInputLanguage != nil else {
-                        try await ime.ime(end: true)
-                        imeStatus = "Not verified: focus the test field in Poki first. Nothing typed."
-                        return
-                    }
-                    // Attaching a hardware keyboard can change the active mode.
-                    // Observe after attachment, not just before sending the command.
-                    try await ime.ime()
-                    try await Task.sleep(for: .milliseconds(250))
-                    if key == "next_input_source" {
-                        for _ in 0..<8 {
-                            try Task.checkCancellation()
-                            guard probe.focusedInputLanguage != nil else { break }
-                            if InProcessProbe.isChineseInputLanguage(probe.focusedInputLanguage) { break }
-                            try await ime.ime(key: "next_input_source")
-                            try await Task.sleep(for: .milliseconds(350))
-                        }
-                    }
-                    guard let language = probe.focusedInputLanguage,
-                          InProcessProbe.isChineseInputLanguage(language) else {
-                        try await ime.ime(end: true)
-                        imeStatus = "Chinese not verified (active: \(probe.focusedInputLanguage ?? "unknown")). No composition or candidate-selection key sent. Enable a Chinese keyboard in iOS Settings."
-                        return
-                    }
-                    if key == "next_input_source" {
-                        imeStatus = "Verified Chinese input: \(language) on the focused test field"
-                        return
-                    }
-                }
-                try await ime.ime(text: text, key: key, end: end)
-                imeStatus = end ? "Keyboard detached" : "Sent — inspect the composition and candidates"
-            } catch {
-                imeStatus = error.localizedDescription
-                do { try await ime.ime(end: true) }
-                catch { imeStatus += " · Keyboard detach failed: \(error.localizedDescription)" }
-            }
         }
     }
 }

@@ -28,6 +28,9 @@ rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", 
 [dev-dependencies]
 tokio = { version = "1.43", features = ["full", "test-util"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+idevice = { path = "../../.deps/idevice-launcher/idevice", default-features = false, features = ["usbmuxd"] }
+
 [profile.release]
 opt-level = "s"
 lto = true

@@ -15,32 +15,29 @@ final class NativeServicesWDATests: XCTestCase {
         }
     }
 
-    func testUnicodeEditingPreservesBackspaceCountAndControlOrder() {
-        let requests = NativeServicesWDA.typingRequests("\u{8}\u{8}中文\t姓名\n", frequency: 55)
-        XCTAssertEqual(requests.count, 5)
-        XCTAssertEqual(requests[0]["text"] as? String, "\u{8}\u{8}")
-        XCTAssertEqual(requests[0]["op"] as? String, "type_keys")
-        XCTAssertEqual(requests[0]["frequency"] as? Int, 55)
-        XCTAssertEqual(requests[1]["text"] as? String, "中文")
-        XCTAssertEqual(requests[1]["clear"] as? Bool, false)
-        XCTAssertEqual(requests[1]["submit"] as? Bool, false)
-        XCTAssertEqual(requests[2]["text"] as? String, "\t")
-        XCTAssertEqual(requests[3]["text"] as? String, "姓名")
-        XCTAssertEqual(requests[4]["text"] as? String, "\n")
+    func testNativeIMEPreservesEditOrderWithoutPasteFallback() throws {
+        let parts = try NativeIME.plan("\u{8}\u{8}中文\t姓名\n")
+        XCTAssertEqual(parts.map(\.text), ["\u{8}", "\u{8}", "中文", "\t", "姓名", "\n"])
+        XCTAssertTrue(parts[2].composition)
+        XCTAssertEqual(parts[2].keys, "zhongwen")
+        XCTAssertThrowsError(try NativeIME.plan("prefix🙂"))
     }
 
-    func testUnicodeRunsStayBatchedAndASCIIKeepsCadence() {
-        let unicode = NativeServicesWDA.typingRequests("Hello 中文 👨‍👩‍👧", frequency: nil)
-        XCTAssertEqual(unicode.count, 1)
-        XCTAssertEqual(unicode[0]["text"] as? String, "Hello 中文 👨‍👩‍👧")
-        let ascii = NativeServicesWDA.typingRequests("AbC!?\n", frequency: 120)
-        XCTAssertEqual(ascii.count, 1)
-        XCTAssertEqual(ascii[0]["frequency"] as? Int, 120)
+    func testNativeIMEUsesWordsAndLiteralUmlautConversion() throws {
+        let sentence = "今天我们一起测试中文输入"
+        let parts = try NativeIME.plan(sentence)
+        XCTAssertEqual(parts.map(\.text).joined(), sentence)
+        XCTAssertTrue(NativeIME.words(sentence).contains("我们"))
+        XCTAssertEqual(try NativeIME.pinyin("选择"), "xuanze")
+        XCTAssertEqual(try NativeIME.pinyin("绿色"), "lvse")
+        XCTAssertEqual(try NativeIME.pinyin("女"), "nv")
     }
 
-    func testUnconfirmedPasteIsNotReportedAsSuccessfulTyping() {
-        XCTAssertThrowsError(try NativeServicesWDA.checkTypingResult(["isError": true, "instruction": "Read the field before retrying"]))
-        XCTAssertNoThrow(try NativeServicesWDA.checkTypingResult(["text_verified": true]))
+    func testNativeIMEVerifiesExactEdits() {
+        XCTAssertTrue(NativeIME.matchesEdit(before: "ab", after: "a你好b", keys: "你好"))
+        XCTAssertFalse(NativeIME.matchesEdit(before: "ab", after: "X你好b", keys: "你好"))
+        XCTAssertFalse(NativeIME.matchesEdit(before: "abc", after: "a", keys: "\u{8}"))
+        XCTAssertFalse(NativeIME.matchesEdit(before: "abc", after: "abc", keys: "\u{8}"))
     }
 
     func testCompactStatusAndGlyphShareEventColor() {

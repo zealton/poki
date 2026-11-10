@@ -126,6 +126,23 @@ pub struct Device {
 }
 
 impl Device {
+    /// Exercise the on-device native implementation from the physically connected Mac.
+    /// Pairing stays in usbmuxd; no exported pairing record or relay is required.
+    #[cfg(target_os = "macos")]
+    pub async fn open_usb(udid: &str) -> Result<Self> {
+        use idevice::usbmuxd::{Connection, UsbmuxdAddr, UsbmuxdConnection};
+        let mut mux = UsbmuxdConnection::default().await?;
+        let device = mux.get_devices().await?.into_iter()
+            .find(|d| d.udid == udid && d.connection_type == Connection::Usb)
+            .ok_or_else(|| Failure::new("No locally attached USB device matches this identifier"))?;
+        let provider = device.to_provider(UsbmuxdAddr::from_env_var()?, "poki-native-usb");
+        let proxy = CoreDeviceProxy::connect(&provider).await?;
+        let port = proxy.tunnel_info().server_rsd_port;
+        let mut adapter = proxy.create_software_tunnel()?.to_async_handle();
+        let rsd = RsdHandshake::new(adapter.connect(port).await?).await?;
+        Ok(Self { adapter, rsd, _control: None })
+    }
+
     pub async fn open(address: IpAddr, pairing: &mut Pairing, timeout: Duration) -> Result<Self> {
         match tokio::time::timeout(timeout, Self::open_inner(address, pairing)).await {
             Ok(result) => result,

@@ -2,6 +2,25 @@ import Foundation
 import PokiCore
 import UIKit
 
+/// A multi-call composition owns the input lane through read-back and removal.
+private final class NativeInputGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var occupied = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    func acquire() async {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if occupied { waiting.append(continuation); lock.unlock() }
+            else { occupied = true; lock.unlock(); continuation.resume() }
+        }
+    }
+    func release() {
+        lock.lock()
+        if waiting.isEmpty { occupied = false; lock.unlock() }
+        else { let next = waiting.removeFirst(); lock.unlock(); next.resume() }
+    }
+}
+
 /// A persistent banner-free client through PokiLauncher's paired CoreDevice services. Requests are
 /// serial at both layers, like WDA and the desktop bridge, and the expensive tunnel/media handshake
 /// is paid once per active transport rather than once per action.
@@ -59,6 +78,7 @@ private final class NativeServicesBridge: @unchecked Sendable {
 final class NativeServicesWDA: HTTPTransport, @unchecked Sendable {
     private struct Tree: @unchecked Sendable { var value: [String: Any] }
     private let screen: CGSize
+    private let inputGate = NativeInputGate()
     /// Reads/launches, screenshots, and HID each keep their own tunnel. PokiCore reads the tree and
     /// picture together; separate lanes preserve the production path's parallel read latency.
     private let native = NativeServicesBridge()
@@ -72,26 +92,13 @@ final class NativeServicesWDA: HTTPTransport, @unchecked Sendable {
 
     init(screen: CGSize) { self.screen = screen }
 
-    /// Diagnostic IME experiment: the owner selects Chinese Pinyin in iOS first.
-    /// Candidate ordering and commitment belong to iOS, not a transliteration table.
-    func ime(text: String = "", key: String? = nil, end: Bool = false) async throws {
-        var request: [String: Any] = ["op": "ime", "text": text, "end": end]
-        if let key { request["key"] = key }
-        _ = try await input.call(request)
-    }
-
-    /// Uncached evidence for the experimental candidate reader. Keep the raw
-    /// roles/identifiers/parents so candidate containers can be distinguished
-    /// from ordinary app text before enabling automatic selection.
-    func imeAccessibilitySnapshot() async throws -> String {
-        let tree = try await native.call(["op": "ax_tree"])
-        let data = try JSONSerialization.data(withJSONObject: tree, options: [.prettyPrinted, .sortedKeys])
-        return String(decoding: data, as: UTF8.self)
-    }
+    var verifiesNativeTyping: Bool { true }
 
     /// Drops all paired tunnels without destroying the transport. The next call reconnects them,
     /// which gives PokiCore's existing restart policy the same clean boundary as the runner path.
     func reset() async {
+        await inputGate.acquire()
+        defer { inputGate.release() }
         async let state: [String: Any]? = try? native.call(["op": "reset"])
         async let picture: [String: Any]? = try? pictures.call(["op": "reset"])
         async let controls: [String: Any]? = try? input.call(["op": "reset"])
@@ -111,6 +118,10 @@ final class NativeServicesWDA: HTTPTransport, @unchecked Sendable {
         if parts.first == "element", parts.count >= 3 { element = parts[1]; parts.remove(at: 1) }
         let path = parts.isEmpty ? "/session" : "/" + parts.joined(separator: "/")
         let key = "\(method) \(path)"
+        let ownsInput = method == "POST" && !["/session", "/appium/settings"].contains(path)
+        if ownsInput { await inputGate.acquire() }
+        defer { if ownsInput { inputGate.release() } }
+        try Task.checkCancellation()
         let input = body.flatMap { try? JSON.parse($0) }
         let sourceIsXML = URLComponents(url: url, resolvingAgainstBaseURL: false)?
             .queryItems?.first(where: { $0.name == "format" })?.value?.lowercased() == "xml"
@@ -123,7 +134,10 @@ final class NativeServicesWDA: HTTPTransport, @unchecked Sendable {
             let value = try await answer(key, body: input, element: element, sourceIsXML: sourceIsXML)
             return (200, (["value": value] as JSON).data())
         } catch {
-            return (500, (["value": ["error": .string("unknown error"), "message": .string(error.localizedDescription)]] as JSON).data())
+            let e = error as NSError
+            let focusChanged = error.localizedDescription.localizedCaseInsensitiveContains("typing focus changed")
+            let code = (e.domain == "PokiKeyboard" && e.code == 2) || focusChanged ? "poki user takeover" : "unknown error"
+            return (500, (["value": ["error": .string(code), "message": .string(error.localizedDescription)]] as JSON).data())
         }
     }
 
@@ -178,11 +192,13 @@ final class NativeServicesWDA: HTTPTransport, @unchecked Sendable {
         case "POST /wda/keys":
             let text = (body?["value"]?.array ?? []).compactMap(\.string).joined()
             guard !text.isEmpty else { throw Self.failure("no keys given") }
-            for request in Self.typingRequests(text, frequency: body?["frequency"]?.int) {
-                let answer = try await input.call(request)
-                try Self.checkTypingResult(answer)
+            let preferred = PokiKeyboardTyping(screen: screen) { [input] request in try await input.call(request) }
+            if let value = try await preferred.type(text, clear: body?["clear"]?.bool ?? false) {
+                return ["textVerified": true, "value": .string(value)]
             }
-            return .null
+            let engine = NativeIME(screen: screen) { [input] request in try await input.call(request) }
+            let value = try await engine.type(text, clear: body?["clear"]?.bool ?? false, frequency: body?["frequency"]?.int)
+            return ["textVerified": true, "value": .string(value)]
         case "POST /wda/homescreen": _ = try await input.call(["op": "button", "button": "home"]); return .null
         case "POST /wda/lock": _ = try await input.call(["op": "button", "button": "lock"]); return .null
         case "POST /wda/pressButton": _ = try await input.call(["op": "button", "button": body?["name"]?.string ?? ""]); return .null
@@ -191,14 +207,8 @@ final class NativeServicesWDA: HTTPTransport, @unchecked Sendable {
         case "POST /wda/apps/terminate":
             guard let bundle = body?["bundleId"]?.string, !bundle.isEmpty else { throw Self.failure("bundleId is needed") }
             _ = try await native.call(["op": "terminate_app", "bundle_id": bundle]); return .null
-        case "POST /wda/getPasteboard":
-            let result = try await native.call(["op": "pasteboard_get"])
-            let text = result["text"] as? String ?? ""
-            return .string(Data(text.utf8).base64EncodedString())
-        case "POST /wda/setPasteboard":
-            guard let encoded = body?["content"]?.string, let data = Data(base64Encoded: encoded) else { throw Self.failure("content must be base64 text") }
-            _ = try await native.call(["op": "pasteboard_set", "text": String(decoding: data, as: UTF8.self)])
-            return .null
+        case "POST /wda/getPasteboard", "POST /wda/setPasteboard":
+            throw Self.failure("Pasteboard access is disabled for native agent typing; use type without via:paste")
         default: throw Self.failure("\(key) is not implemented in the experimental native-services path")
         }
     }
@@ -303,43 +313,6 @@ final class NativeServicesWDA: HTTPTransport, @unchecked Sendable {
     private func coordinate(_ value: Double, across: CGFloat) -> Int {
         guard across > 1 else { return 0 }
         return max(0, min(65_535, Int((value / Double(across - 1) * 65_535).rounded())))
-    }
-    static func checkTypingResult(_ answer: [String: Any]) throws {
-        if answer["isError"] as? Bool == true {
-            throw Self.failure(answer["instruction"] as? String ?? answer["reason"] as? String ?? "Typing was not confirmed; read the field before retrying")
-        }
-    }
-
-    /// Keep edit keys as keystrokes, including those embedded in Unicode text.
-    /// Never turn a count of backspaces into Select All/Delete or paste Tab/Return literally.
-    static func typingRequests(_ text: String, frequency: Int?) -> [[String: Any]] {
-        func keys(_ value: String) -> [String: Any] {
-            var request: [String: Any] = ["op": "type_keys", "text": value]
-            if let frequency { request["frequency"] = frequency }
-            return request
-        }
-        if hidCanType(text) { return [keys(text)] }
-        var requests: [[String: Any]] = []
-        var run = ""
-        var controls = false
-        func flush() {
-            guard !run.isEmpty else { return }
-            requests.append(hidCanType(run) ? keys(run) : ["op": "type_text", "text": run, "clear": false, "submit": false])
-            run = ""
-        }
-        for scalar in text.unicodeScalars {
-            let isControl = scalar.value == 8 || scalar.value == 9 || scalar.value == 10
-            if isControl != controls { flush(); controls = isControl }
-            run.unicodeScalars.append(scalar)
-        }
-        flush()
-        return requests
-    }
-
-    private static func hidCanType(_ text: String) -> Bool {
-        text.unicodeScalars.allSatisfy { scalar in
-            scalar.value == 8 || scalar.value == 9 || scalar.value == 10 || (32...126).contains(scalar.value)
-        }
     }
     private static func looksLocked(_ tree: [String: Any]) -> Bool {
         let app = tree["foreground_app"] as? [String: Any]

@@ -9,6 +9,7 @@ targets:
     entitlements:
       path: Poki/PokiLocal.entitlements
       properties:
+        com.apple.security.application-groups: [$(POKI_APP_GROUP)]
         com.apple.developer.networking.networkextension: [packet-tunnel-provider]
     dependencies:
       - target: PokiTunnel
