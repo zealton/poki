@@ -109,6 +109,10 @@ private struct AccountDetail: View {
             Section {
                 LabeledContent("Type", value: provider.name)
                 LabeledContent("Connection", value: ModelAccounts.method(provider))
+                if ModelKeys.isMemoryOnly(provider) {
+                    Text("Simulator: key is kept only until Poki exits. Enter it again after relaunch.")
+                        .font(.footnote).foregroundStyle(.orange)
+                }
                 if provider == .custom { LabeledContent("Address", value: ModelKeys.customURL) }
                 Button(provider.signsIn ? "Sign In Again" : provider == .custom ? "Edit Address and Key" : "Replace Key") {
                     if provider.signsIn { signingIn = true } else { editing = true }

@@ -1,4 +1,5 @@
 import AuthenticationServices
+import Darwin
 import Foundation
 import PiSwiftAI
 import SwiftUI
@@ -204,14 +205,62 @@ final class SignInRedirect: NSObject, WKNavigationDelegate {
 /// once at launch into the keychain and the provider is selected. Nothing is printed.
 enum TestCredential {
     static func importIfGiven() {
+        if let path = ProcessInfo.processInfo.environment["POKI_TEST_CREDENTIAL_FIFO"] {
+            importFIFO(path)
+            return
+        }
         guard let path = ProcessInfo.processInfo.environment["POKI_TEST_CREDENTIAL"],
               let data = FileManager.default.contents(atPath: path),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let provider = (json["provider"] as? String).flatMap(ModelProvider.init(rawValue:)),
               let secret = json["secret"] as? String else { return }
-        try? ModelKeys.save(secret, for: provider)
+        guard (try? ModelKeys.save(secret, for: provider)) != nil else { return }
         ModelKeys.selectedProvider = provider
-        if let model = json["model"] as? String { ModelKeys.selectedModel = model }
+        if let model = json["model"] as? String {
+            ModelCatalog.set(model, on: true, for: provider)
+            ModelKeys.selectedModel = model
+        }
+    }
+
+    /// Explicit Debug Simulator provisioning without a plaintext credential file or a secret in
+    /// argv/environment. The environment names only a private, owner-owned FIFO; read at most 16 KiB.
+    private static func importFIFO(_ path: String) {
+        var before = stat()
+        guard lstat(path, &before) == 0, (before.st_mode & S_IFMT) == S_IFIFO,
+              before.st_uid == getuid(), (before.st_mode & 0o077) == 0 else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let fd = open(path, O_RDONLY | O_NOFOLLOW)
+            guard fd >= 0 else { return }
+            defer { close(fd) }
+            var after = stat()
+            guard fstat(fd, &after) == 0, after.st_ino == before.st_ino,
+                  after.st_dev == before.st_dev else { return }
+            var data = Data()
+            var buffer = [UInt8](repeating: 0, count: 1024)
+            while data.count <= 16_384 {
+                let count = read(fd, &buffer, buffer.count)
+                if count == 0 { break }
+                if count < 0 { return }
+                data.append(contentsOf: buffer.prefix(count))
+            }
+            guard data.count <= 16_384,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let provider = (json["provider"] as? String).flatMap(ModelProvider.init(rawValue:)),
+                  let secret = json["secret"] as? String else { return }
+            DispatchQueue.main.async {
+                do {
+                    try ModelKeys.save(secret, for: provider)
+                    ModelKeys.selectedProvider = provider
+                    if let model = json["model"] as? String {
+                        ModelCatalog.set(model, on: true, for: provider)
+                        ModelKeys.selectedModel = model
+                    }
+                    AppLog.shared.add("model", "Simulator credential imported for \(provider.name)\(ModelKeys.isMemoryOnly(provider) ? " (memory only)" : "")")
+                } catch {
+                    AppLog.shared.add("model", "Simulator credential import failed; enter it in Accounts")
+                }
+            }
+        }
     }
 }
 #endif

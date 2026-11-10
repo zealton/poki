@@ -47,6 +47,14 @@ final class InProcessProbe: ObservableObject {
 
     let queue = DispatchQueue(label: "poki.inprocess.probe", qos: .userInitiated)
     private var record: [[String: Any]] = []
+    #if DEBUG && targetEnvironment(simulator)
+    private var interactiveGrant: UIBackgroundTaskIdentifier = .invalid
+    private func endInteractiveGrant() {
+        guard interactiveGrant != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(interactiveGrant)
+        interactiveGrant = .invalid
+    }
+    #endif
 
     func startFromLaunchArguments(model: AppModel) {
         let defaults = UserDefaults.standard
@@ -68,6 +76,19 @@ final class InProcessProbe: ObservableObject {
             case "tools": await toolsCycle(model: model, app: defaults.string(forKey: "pokiProbeApp") ?? "local.pokimcp.fixture")
             case "gym": await gymScorecard(model: model)
             case "chat": await chatCycle(model: model)
+            case "chat-openrouter": await chatCycle(model: model, liveOpenRouter: true)
+            #if DEBUG && targetEnvironment(simulator)
+            case "interactive":
+                // Simulator-only setup for testing the normal chat UI. The phone tools and model
+                // remain Poki's production implementations; there is no scripted task or reply.
+                if await prepare() {
+                    model.inProcessReadyForProbe()
+                    endInteractiveGrant()
+                    interactiveGrant = UIApplication.shared.beginBackgroundTask(withName: "Poki Simulator acceptance") { [weak self] in
+                        Task { @MainActor in self?.endInteractiveGrant() }
+                    }
+                }
+            #endif
             case "bench": await benchmark(rounds: defaults.integer(forKey: "pokiBenchRounds") > 0 ? defaults.integer(forKey: "pokiBenchRounds") : 5)
             default: await prepareOnly()
             }
@@ -302,7 +323,7 @@ final class InProcessProbe: ObservableObject {
     /// this path. The chat is pointed at an OpenAI-compatible endpoint (on CI, a scripted model on the
     /// Mac), the owner sends a task, pi runs it with look and do on the phone, the session is saved; then an
     /// outside agent's `ask_poki` runs a second task as a hand-off. Into Documents/inprocess-probe.json.
-    func chatCycle(model: AppModel) async {
+    func chatCycle(model: AppModel, liveOpenRouter: Bool = false) async {
         guard begin("chat with Poki's agent") else { return }
         defer { end() }
         guard await prepare() else { return }
@@ -310,9 +331,24 @@ final class InProcessProbe: ObservableObject {
         let background = UIApplication.shared.beginBackgroundTask(withName: "Chat probe")
         defer { UIApplication.shared.endBackgroundTask(background) }
         let defaults = UserDefaults.standard
-        ModelKeys.customURL = defaults.string(forKey: "pokiProbeModelURL") ?? "http://127.0.0.1:8765/v1"
-        ModelKeys.customModel = defaults.string(forKey: "pokiProbeModel") ?? "poki-mock"
-        ModelKeys.selectedProvider = .custom
+        if liveOpenRouter {
+            // The real provider, credential, chat loop and PokiCore tools. No proxy on the Mac and
+            // no fixture-only tool catalog. A Debug Simulator FIFO may still be importing the key.
+            for _ in 0..<200 where !ModelKeys.hasKey(.openrouter) {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            guard ModelKeys.hasKey(.openrouter) else {
+                note("OpenRouter account missing", ["step": "chat_missing_key"])
+                return
+            }
+            ModelKeys.selectedProvider = .openrouter
+        } else {
+            ModelKeys.customURL = defaults.string(forKey: "pokiProbeModelURL") ?? "http://127.0.0.1:8765/v1"
+            ModelKeys.customModel = defaults.string(forKey: "pokiProbeModel") ?? "poki-mock"
+            ModelKeys.selectedProvider = .custom
+        }
+        note("chat account: \(ModelKeys.selectedProvider.name), \(ModelKeys.selectedModel)",
+             ["step": "chat_account", "provider": ModelKeys.selectedProvider.rawValue, "model": ModelKeys.selectedModel])
         AskPoki.refresh()
         guard let chat = AskPoki.chat else { note("no chat", ["step": "chat_missing"]); return }
         chat.newConversation()
@@ -330,6 +366,9 @@ final class InProcessProbe: ObservableObject {
         try? await Task.sleep(for: .seconds(1))
         let saved = SessionStore.shared.session(chat.sessionID)
         note("chat session saved: \(saved != nil)", ["step": "chat_saved", "saved": saved != nil, "entries": saved?.entries.count ?? 0, "calls": saved?.calls.count ?? 0])
+        // The paid live-provider acceptance executes exactly the requested task, not an additional
+        // unrelated fixture hand-off. Full call receipts remain in Poki's normal Sessions store.
+        if liveOpenRouter { return }
         // An outside agent hands a task over.
         let t1 = ProcessInfo.processInfo.systemUptime
         let handoff = await model.phoneToolWithPicture("ask_poki", arguments: "{\"task\":\"Open the Poki fixture app and tell me what it shows.\"}")

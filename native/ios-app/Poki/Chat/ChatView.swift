@@ -471,6 +471,7 @@ struct ComposerInputView: View {
             HStack(alignment: .bottom, spacing: 8) {
                 HStack(alignment: .bottom, spacing: 4) {
                     TextField(text: $input, prompt: Text(dictation.on ? "Listening…" : "Message Poki").foregroundStyle(ChatColor.placeholder), axis: .vertical) { Text("Message Poki") }
+                        .accessibilityIdentifier("poki.chat.input")
                         .font(.system(size: 17))
                         .focused($focused)
                         .multilineTextAlignment(.leading)
@@ -514,6 +515,7 @@ struct ComposerInputView: View {
                         Image(systemName: "arrow.up.circle.fill").resizable().scaledToFit().frame(width: 30, height: 30).foregroundStyle(.white, Site.blue)
                     }
                     .accessibilityLabel(Text("Send"))
+                    .accessibilityIdentifier("poki.chat.send")
                 } else {
                     // The live voice conversation: Poki listens and answers out loud. It ends 8 s after an answer if nobody speaks, in the background, or when you end it.
                     Button {
