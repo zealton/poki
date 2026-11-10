@@ -25,6 +25,10 @@ final class CarPlayWorkspace {
     private var controls: [String: [String: Any]] = [:]
     private var generation = UUID()
     private var current: String?
+    var selectedAppName: String? {
+        guard let current else { return nil }
+        return (config?["apps"] as? [[String: String]])?.first { $0["bundle"] == current }?["name"] ?? current
+    }
     private var receipt: (id: String, bundle: String, scene: String, pid: Int, at: Date)?
     func begin() { generation = UUID(); receipt = nil; controls = [:]; current = nil; preview = nil }
     func stop() { generation = UUID(); receipt = nil; controls = [:] }

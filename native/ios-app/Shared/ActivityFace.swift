@@ -71,6 +71,10 @@ struct ActivityFace: Hashable {
     var steps: [Bool] = []
     var stepUnderWay = false
     var finished = false
+    var agentTask: PokiActivityAttributes.AgentTask?
+    var snapshotID: String?
+    var snapshotAt: Date?
+    var hasSnapshot = false
     /// The ring around the glyph in the compact and minimal island.
     var ring: Ring = .none
 
@@ -80,6 +84,12 @@ struct ActivityFace: Hashable {
         case fraction(Double)
         /// Time left on an approval, run down by the system.
         case timer(ClosedRange<Date>)
+    }
+
+    /// Approval/handoff content keeps its full text and controls instead of the optional trace.
+    var showsAgentTrace: Bool {
+        guard agentTask != nil else { return false }
+        switch bottom { case .none, .stop: return true; default: return false }
     }
 
     var hasAction: Bool {
@@ -135,6 +145,22 @@ extension PokiState {
     func face(stale: Bool) -> ActivityFace {
         var face = baseFace
         face.caller = caller
+        face.agentTask = agentTask
+        face.snapshotID = snapshotID; face.snapshotAt = snapshotAt; face.hasSnapshot = hasThumbnail
+        if phase == .working, let task = agentTask {
+            face.symbol = task.background ? "rectangle.on.rectangle" : "hand.tap.fill"
+            face.stepUnderWay = !task.thinking
+            if let stage = task.stage { face.content = stage }
+            if let current = task.current, let total = task.total, total > 0 {
+                face.ring = .fraction(Double(current - 1) / Double(total))
+            } else { face.ring = .none }
+            if task.thinking { face.compact = .text(String(activity: "Thinking"), .plain) }
+        }
+        if phase == .idle, agentTask?.active == false, agentTask?.stopped == true {
+            let word = String(activity: "Stopped")
+            face.symbol = "stop.circle"; face.status = word; face.shortStatus = word
+            face.tone = .quiet; face.meta = .none; face.compact = .text(word, .quiet)
+        }
         // A fresh event ("Started", "Allowed") takes the status word's place for a few seconds, in
         // its own colour. An app switch keeps the app's name as the word and only lights it up.
         if let event, !phase.holdsApproval {

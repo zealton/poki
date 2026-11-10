@@ -113,6 +113,7 @@ final class ChatModel {
     }
     /// For the log's line at the end of each task: when it began, the tool calls, finish_task's verdict.
     private var taskStart = Date()
+    private var activityID: UUID?
     private var toolCalls = 0
     private var taskResult: TaskResult?
     private var client: ModelClient?
@@ -350,10 +351,13 @@ final class ChatModel {
 
     private func began(_ engine: String, _ provider: ModelProvider, _ model: String) {
         taskStart = Date(); toolCalls = 0; taskResult = nil
+        let id = UUID(); activityID = id
+        app.beginAgentActivity(id, background: usingCarPlay || usingContained) { [weak self] in self?.stop() }
         AppLog.shared.add("chat", "task started: \(engine), \(provider.rawValue)/\(model)")
     }
 
     private func logEnd(_ engine: String, outcome: PiLoop.Outcome?) {
+        finishActivity(outcome)
         let seconds = String(format: "%.1f", Date().timeIntervalSince(taskStart))
         let verdict = taskResult.map { $0.success ? "success" : "failure" } ?? "not called"
         let ending = outcome.map { if case .failed = $0 { "failed" } else { "\($0)" } } ?? (stopAsked ? "stopped" : "ended")
@@ -393,6 +397,7 @@ final class ChatModel {
 
     private func ended(_ outcome: PiLoop.Outcome, delivered youID: UUID) {
         finishPlan()
+        finishActivity(outcome)
         // The turn is over: the phone goes back to the app the task began in (Poki's chat, where the
         // reply is), as a client's finish does (ESP-176). Nothing moves when it is in front already.
         if usingContained || usingCarPlay { endIsolatedRun() } else { app.finishTask() }
@@ -406,6 +411,7 @@ final class ChatModel {
 
     /// Ends the task after the step under way: nothing more is sent to the phone or the model.
     func stop() {
+        if let id = activityID { app.endAgentActivity(id, success: nil, stopped: true) }
         if usingContained || usingCarPlay { endIsolatedRun() }
         guard running else { return }
         stopAsked = true
@@ -460,7 +466,13 @@ final class ChatModel {
     private func perform(_ call: ToolCall) async -> PokiCore.ToolAnswer {
         awaitingModel = false
         let started = Date()
+        let id = activityID
+        let title = isolatedActivityTitle(call)
+        if let id, let title { app.isolatedActivityStarted(id, title: title, app: isolatedAppName) }
         let answer = await performCall(call)
+        if let id, let title, !stopAsked, !Task.isCancelled {
+            app.isolatedActivityFinished(id, title: title, app: isolatedAppName, answer: answer)
+        }
         calls.append(CallRecord(name: call.name, arguments: call.arguments, answer: String(answer.text.prefix(2000)), ms: Int(Date().timeIntervalSince(started) * 1000), ok: !answer.isError))
         if !stopAsked { awaitingModel = true }
         persist()
@@ -518,6 +530,7 @@ final class ChatModel {
     /// The bubble shows the model's steps up to the current one: those before it done, it under way. A step
     /// appears when the model reaches it, as the board draws them.
     private func showPlan(_ plan: [String], current: Int) {
+        if let id = activityID { app.agentActivityPlan(id, steps: plan, current: current) }
         modelPlan = plan
         updatePlan { steps in
             if steps.count > current { steps.removeLast(steps.count - current) }
@@ -526,6 +539,30 @@ final class ChatModel {
                 if steps.indices.contains(i) { steps[i].text = plan[i]; steps[i].state = state } else { steps.append(PlanStep(plan[i], state: state)) }
             }
         }
+    }
+
+    private var isolatedAppName: String? { usingCarPlay ? CarPlayWorkspace.shared.selectedAppName : (usingContained ? "Safari" : nil) }
+
+    /// Operation names only: typed values and raw tool arguments never reach the Lock Screen.
+    private func isolatedActivityTitle(_ call: ToolCall) -> String? {
+        guard usingCarPlay && call.name.hasPrefix("carplay_") || usingContained && call.name.hasPrefix("container_") else { return nil }
+        switch call.name {
+        case "carplay_apps": return String(activity: "Finding apps")
+        case "carplay_open": return String(activity: "Opening app")
+        case "carplay_look", "container_look": return String(activity: "Reading screen")
+        case "carplay_press", "carplay_tap": return String(activity: "Tapping a button")
+        case "carplay_type": return String(activity: "Entering text")
+        default:
+            let args = (call.arguments.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) }) as? [String: Any]
+            return args?["action"] as? String == "wait" ? String(activity: "Waiting for screen") : String(activity: "Scrolling")
+        }
+    }
+
+    private func finishActivity(_ outcome: PiLoop.Outcome?) {
+        guard let id = activityID else { return }
+        let failed: Bool
+        switch outcome { case .failed?, .overTurns?: failed = true; default: failed = false }
+        app.endAgentActivity(id, success: failed ? false : taskResult?.success, stopped: stopAsked || outcome == .stopped)
     }
 
     // MARK: Steps and approvals from PokiCore

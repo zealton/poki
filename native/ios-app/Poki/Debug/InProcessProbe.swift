@@ -78,6 +78,7 @@ final class InProcessProbe: ObservableObject {
             case "chat": await chatCycle(model: model)
             case "chat-openrouter": await chatCycle(model: model, liveOpenRouter: true)
             #if DEBUG && targetEnvironment(simulator)
+            case "activity": await activitySurfaceFixture(model: model)
             case "carplay": await carPlayAcceptance(model: model)
             case "contained": await containedCycle(model:model)
             case "interactive":
@@ -98,10 +99,34 @@ final class InProcessProbe: ObservableObject {
     }
 
     #if DEBUG && targetEnvironment(simulator)
+    /// Explicit Simulator UI fixture. It exercises the real ActivityKit/App Group path, not a model
+    /// or a phone task. The visible labels identify the sample so screenshots cannot imply live work.
+    private func activitySurfaceFixture(model: AppModel) async {
+        let id = UUID()
+        model.beginAgentActivity(id, background: true) { [weak model] in
+            model?.endAgentActivity(id, success: nil, stopped: true)
+        }
+        model.agentActivityPlan(id, steps: ["Live Activity UI sample"], current: 1)
+        let jpeg = ActivityPreview.sampleScreen()?.jpegData(compressionQuality: 0.8)
+        for title in ["UI sample: open app", "UI sample: read screen", "UI sample: inspect image"] {
+            model.isolatedActivityStarted(id, title: title, app: "UI sample")
+            model.isolatedActivityFinished(id, title: title, app: "UI sample", answer: .init(text: "UI fixture only", jpeg: jpeg, isError: false))
+        }
+        let ownsBackground = !model.background.isOn
+        if ownsBackground { model.background.start() }
+        defer { if ownsBackground && !model.sessionOn { model.background.stop() } }
+        for _ in 0..<600 {
+            guard model.liveActivityState.agentTask?.active == true else { return }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        model.endAgentActivity(id, success: true, stopped: false)
+    }
+
     /// Starts tasks in the original ChatModel after the independent editor is
     /// already typing. Never opens the global XCTest automation session.
     private func carPlayAcceptance(model: AppModel) async {
         guard let chat = AskPoki.chat else { return }
+        model.prepareAgentActivity() // Owner starts the test in front, before the independent editor.
         let ownsBackground = !model.background.isOn
         if ownsBackground { model.background.start() }
         defer { if ownsBackground && !model.sessionOn { model.background.stop() } }

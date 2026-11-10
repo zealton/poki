@@ -193,13 +193,7 @@ struct RootView: View {
         } message: {
             Text("Poki closes by itself so agents can see the screen again. Open Poki again afterwards, from the notification or the Home Screen; it turns on when it opens.")
         }
-        // Before the first automation after a restart: iOS's passcode screen is next, and expected.
-        .alert("Enter Your Passcode Next", isPresented: Binding(get: { model.passcodeHeadsUp }, set: { if !$0 { model.passcodeHeadsUp = false } })) {
-            Button("Cancel", role: .cancel) { model.passcodeHeadsUp = false }
-            Button("Continue") { model.continueAfterPasscodeHeadsUp() }
-        } message: {
-            Text("This is the first time Poki starts automation since your iPhone restarted, so iOS will ask for your passcode on the next screen. That screen belongs to iOS: Poki can’t see or read what you enter, and it asks only once until the next restart.")
-        }
+
     }
 
     var body: some View {

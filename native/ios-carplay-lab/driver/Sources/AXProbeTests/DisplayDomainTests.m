@@ -21,6 +21,23 @@
 - (void)testUserTypingForLiveCarPlay {
     [self typeLines:160];
 }
+// Run after a prepared Poki task. Expanding the island is deliberately separate from typing acceptance.
+- (void)testAgentLiveActivitySurface {
+    XCUIApplication *pad=[[XCUIApplication alloc]initWithBundleIdentifier:@"local.axlab.TypingPad"];
+    [pad launch];XCUIElement *editor=pad.textViews[@"user.editor"];
+    XCTAssertTrue([editor waitForExistenceWithTimeout:5]);[editor tap];[editor typeText:@"User typing while the Agent status stays in the island."];
+    XCUIApplication *springboard=[[XCUIApplication alloc]initWithBundleIdentifier:@"com.apple.springboard"];
+    [self attachScreen:@"Agent compact island"];
+    [[springboard coordinateWithNormalizedOffset:CGVectorMake(.5,.03)]pressForDuration:1.3];
+    XCUIElement *mode=springboard.staticTexts[@"Background"];
+    XCTAssertTrue([mode waitForExistenceWithTimeout:5],@"The real expanded Live Activity must expose the task mode");
+    [self attachScreen:@"Agent expanded island"];
+    NSLog(@"AXLAB island %@",springboard.debugDescription);
+    XCUIElement *stop=springboard.buttons[@"Stop"];
+    XCTAssertTrue(stop.exists);[stop tap];
+    XCTAssertEqual(pad.state,XCUIApplicationStateRunningForeground,@"Stop must keep the owner's app in front");
+    [self attachScreen:@"Agent stopped without opening Poki"];
+}
 - (void)testAgentExecutionPreferenceUI {
     self.continueAfterFailure=NO;
     XCUIApplication *app=[[XCUIApplication alloc]initWithBundleIdentifier:@"app.zealton.poki"];

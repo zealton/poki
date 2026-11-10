@@ -1,0 +1,72 @@
+Agent progress in the Dynamic Island / Lock Screen
+=================================================
+
+In-app agent turns now own a Live Activity task ID and an explicit terminal
+result. The compact island shows work/thinking status; long-pressing it shows
+the task stage, execution mode, actual plan position when reported, the last
+three operation labels and a time-stamped target screenshot. Stop cancels the
+owning chat without activating Poki. Slow model responses remain in progress;
+failure, stop, unknown result and successful finish are distinct.
+
+Snapshots are real JPEG observations returned by the selected tool transport.
+They are downsampled to 240 pixels and written atomically to immutable UUID
+files in the existing App Group. ActivityKit carries only the UUID and date,
+not image bytes. Invalid images do not advance the version. New tasks clear
+old snapshot state; disk retention is bounded. The widget does not fetch
+images or run a video stream. System scheduling still controls presentation.
+
+Ordinary isolated-task progress, problems and completion use no alert/banners,
+so the island does not automatically expand over the owner's keyboard. Genuine
+approval/handoff states retain the existing human controls and full text.
+Primary-display Core tool/runner events do not replace an active isolated task.
+Raw typed values are stripped from operation labels, trace labels are bounded,
+and task text/images are marked privacy-sensitive for system redaction.
+
+Passcode behavior
+-----------------
+Poki's own "Enter Your Passcode Next" modal has been removed. Starting,
+revisiting or connecting an agent to Poki no longer eagerly opens XCTest.
+A real look/do demand opens the in-process session when that backend is selected;
+native-services and isolated tools do not initialize XCTest as a side effect.
+Normal system authorization, approval authentication and decline handling remain.
+This does not remove an iOS-required passcode after authorization expires or
+when iOS otherwise requires it; Poki never stores or types the owner's passcode.
+
+Repeatable validation
+---------------------
+AgentActivityTests: bounded payload/old JSON, immutable snapshots/invalid input,
+new-task isolation, slow-model lifecycle and stale task completion rejection.
+OnDemandAutomationTests: startup/revisit is quiet; an actual request opens the
+in-process session; native-services does not expect XCTest authorization.
+The existing passcode-decline, ChatHarness and CarPlayTransport tests also run.
+17 selected iOS tests passed on Xcode 26.2 / iOS 26.2 Simulator, including a
+properly ad-hoc signed build with the actual shared App Group entitlement.
+A separate system UI fixture test displayed the shared image and trace, expanded
+the real island, pressed Stop and confirmed TypingPad remained in front. This
+UI sample is separate from real task acceptance; the initial fixture run also
+handled the existing first-use notification permission before typing began.
+
+For a clearly labelled UI fixture (no model or phone task): launch a Debug
+Simulator build with -pokiScreen chat -pokiInProcess activity
+-pokiActivityEvidence YES -AppleLanguages '(en)' -AppleLocale en_US.
+It uses the production ActivityController/App Group/widget path with a sample
+Messages image and labels starting "UI sample". The fixture remains active for
+up to 150 seconds or until Stop. It must never be presented as real Safari work.
+Run the prepared lab driver's testAgentLiveActivitySurface separately from the
+continuous-typing acceptance; expanding the island is a deliberate user gesture.
+Opt-in Simulator evidence is Documents/activity-evidence.jsonl (no Release hook).
+
+Current live acceptance boundary
+--------------------------------
+A live in-app OpenRouter/DeepSeek attempt updated the real compact island while
+TypingPad entered 9,500 exact characters over 158.29 seconds with zero recorded
+focus/foreground interruptions. That Safari attempt FAILED because the dedicated
+Simulator's CarPlay service/display did not provide an eligible external scene.
+It is not a successful search or screenshot acceptance. Existing earlier
+CarPlay multi-app success evidence remains separate and is not reclassified
+as validation of this new Live Activity version.
+
+The owner's iPhone was disconnected for the night. The new build is not installed
+or accepted on that physical phone; mandatory iOS authorization behavior remains
+a physical-device check when it is next available. CarPlay isolation remains
+Debug Simulator-only; this UI change does not grant on-device virtual displays.

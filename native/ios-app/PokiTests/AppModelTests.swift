@@ -31,6 +31,8 @@ final class FakeLauncher: RunnerLauncher, @unchecked Sendable {
 /// the passcode, until `answer(_:)`.
 final class FakeAutomation: InProcessAutomation, @unchecked Sendable {
     private let lock = NSLock()
+    private var prepared = 0
+    var prepares: Int { lock.withLock { prepared } }
     private var open = false
     private var gate: DispatchSemaphore?
     private var answer: [String: Any]?
@@ -39,6 +41,7 @@ final class FakeAutomation: InProcessAutomation, @unchecked Sendable {
     /// Lets a held open go on, with this answer instead of opening (nil opens).
     func answer(_ result: [String: Any]?) { lock.withLock { answer = result; gate?.signal(); gate = nil } }
     func prepare() -> [String: Any] {
+        lock.withLock { prepared += 1 }
         if let held = lock.withLock({ gate }) {
             held.wait()
             if let given = lock.withLock({ () -> [String: Any]? in defer { answer = nil }; return answer }) { return given }
@@ -266,10 +269,9 @@ final class InProcessPasscodeTests: XCTestCase {
     private var session: FakeAutomation!
 
     override func setUp() async throws {
-        try XCTSkipUnless(AutomationPath.current == .inProcess, "Poki Runner path")
         saved = (UserDefaults.standard.string(forKey: "relayAddress"), UserDefaults.standard.object(forKey: "relayEnabled"), SetupState.load())
         session = FakeAutomation()
-        model = AppModel(launcher: FakeLauncher(), pairer: FakePairing(), automation: session)
+        model = AppModel(launcher: FakeLauncher(), pairer: FakePairing(), automation: session, automationPath: .inProcess)
         model.loopback.simulate(.working(ms: 9))
         model.setup.loopback = .proxy
         XCTAssertTrue(model.setRelay("https://relay.invalid"))
@@ -294,6 +296,7 @@ final class InProcessPasscodeTests: XCTestCase {
 
     func testAPasscodeWaitAsksTheOwnerAndTellsTheAgentWhoMustEnterIt() async {
         session.holdNextOpen()
+        model.requestAutomationForTask("an actual phone task")
         model.wakeRunner()
         // On the simulator the launcher is WebDriverAgent on the Mac; its answer comes first.
         await waitFor("the simulator's runner check answered") { ["failed", "running"].contains(self.model.runner.state) }

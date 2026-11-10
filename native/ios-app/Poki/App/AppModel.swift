@@ -120,33 +120,22 @@ final class AppModel {
     private(set) var servicesSilent = false
     /// The runner has been launching for a while: iOS may be asking for the passcode.
     private(set) var passcodeHint = false
-    /// Turning on now will probably bring up iOS's passcode screen (no automation has started since
-    /// this iPhone last restarted, or ever): the owner is told first (`passcodeHeadsUp`).
-    var passcodeExpected: Bool { UserDefaults.standard.double(forKey: Self.automationBootKey) != BootClock.current }
-    /// The note before iOS's passcode screen is showing; Continue turns Poki on.
-    var passcodeHeadsUp = false
-    private var passcodeHeadsUpReconnect = true
-    private var passcodeHeadsUpSeen = 0.0
+    /// XCTest authorization is requested only when a real phone tool needs it. Native services
+    /// and isolated-display tools do not use XCTest's authorization path.
+    var passcodeExpected: Bool {
+        automationPath != .nativeServices && UserDefaults.standard.double(forKey: Self.automationBootKey) != BootClock.current
+    }
+    private var automationRequested = false
     private static let automationBootKey = "automationStartedBoot"
-    /// Automation started in this boot: iOS will not ask again until the next restart.
     private func automationStarted() {
         InProcessWDA.gate.withLock { $0.startedThisBoot = true }
-        guard UserDefaults.standard.double(forKey: Self.automationBootKey) != BootClock.current else { return }
         UserDefaults.standard.set(BootClock.current, forKey: Self.automationBootKey)
     }
-    /// Continue on the note: Poki turns on, and iOS's passcode screen comes next.
-    func continueAfterPasscodeHeadsUp() {
-        passcodeHeadsUp = false
-        passcodeHeadsUpSeen = BootClock.current
-        if let why = passcodeHeldOpen {
-            passcodeHeldOpen = nil
-            warmInProcess(why)
-            return
-        }
-        startSession(reconnectLocal: passcodeHeadsUpReconnect)
+    func requestAutomationForTask(_ why: String) {
+        guard automationPath == .inProcess else { return }
+        automationRequested = true
+        warmInProcess(why)
     }
-    /// The in-process open waiting for Continue on the passcode note: its reason.
-    private var passcodeHeldOpen: String?
     /// The hand-off the agent asked the owner for, while it waits (shown on the home screen too).
     private(set) var handoffText: String?
     private var launchingSince: Date?
@@ -165,13 +154,45 @@ final class AppModel {
 
     let host = AppCoreHost()
     /// Poki Runner or Poki's own process, fixed for this launch (Debug tab).
-    let automationPath = AutomationPath.current
+    let automationPath: AutomationPath
     private let core: LiveCore
     private let nativeServicesWDA: NativeServicesWDA?
     private let launcher: RunnerLauncher
     private let pairer: DevicePairing
     private let pairingKeepAlive = KeepAlive()
     private let activity = ActivityController()
+    private var activityStop: (id: UUID, action: () -> Void)?
+    var liveActivityState: PokiState { activity.state }
+
+    func prepareAgentActivity() { activity.start(deviceName: deviceName) }
+
+    func beginAgentActivity(_ id: UUID, background: Bool, stop: @escaping () -> Void) {
+        activity.beginAgentTask(id, background: background)
+        activity.start(deviceName: deviceName)
+        activityStop = (id, stop)
+    }
+    func agentActivityPlan(_ id: UUID, steps: [String], current: Int) {
+        activity.agentPlan(id, steps: steps.map { StepLabels.withoutTypedText($0) }, current: current)
+    }
+    func isolatedActivityStarted(_ id: UUID, title: String, app: String?) {
+        guard activity.state.agentTask?.id == id, activity.state.agentTask?.active == true else { return }
+        activity.stepStarted(title)
+        activity.update { $0.phase = .working; $0.headline = title; $0.app = app ?? $0.app }
+    }
+    func isolatedActivityFinished(_ id: UUID, title: String, app: String?, answer: PokiCore.ToolAnswer) {
+        guard activity.state.agentTask?.id == id, activity.state.agentTask?.active == true else { return }
+        activity.record(step: title, ok: !answer.isError)
+        activity.update { $0.app = app ?? $0.app }
+        activity.setThumbnail(answer.jpeg)
+    }
+    func endAgentActivity(_ id: UUID, success: Bool?, stopped: Bool) {
+        activity.endAgentTask(id, success: success, stopped: stopped)
+        if activityStop?.id == id { activityStop = nil }
+    }
+    func stopAgentFromLiveActivity() {
+        if let stop = activityStop?.action { stop() }
+        else { pauseRunner(reason: "Stopped from the Live Activity") }
+    }
     let log = AppLog.shared
     private var eventsTask: Task<Void, Never>?
     private var handoffTimer: Timer?
@@ -231,7 +252,8 @@ final class AppModel {
 
     /// The same call with its picture, for the gym scorecard (the Debug probe's `gym` mode).
     func phoneToolWithPicture(_ name: String, arguments: String) async -> PokiCore.ToolAnswer {
-        await core.callTool(name, arguments: arguments)
+        if name == "look" || name == "do" { requestAutomationForTask("a phone tool") }
+        return await core.callTool(name, arguments: arguments)
     }
 
     /// The chats watch the steps and approvals of the task they run (the in-app chat and an outside
@@ -253,7 +275,8 @@ final class AppModel {
         return ChatModel.delegatedBusy
     }
 
-    init(launcher: RunnerLauncher = RustLauncher(), pairer: DevicePairing = RustPairing(), automation: InProcessAutomation = PKInProcess.shared()) {
+    init(launcher: RunnerLauncher = RustLauncher(), pairer: DevicePairing = RustPairing(), automation: InProcessAutomation = PKInProcess.shared(), automationPath: AutomationPath = .current) {
+        self.automationPath = automationPath
         ActivityController.endAll()
         self.automation = automation
         // A reinstall emptied the container: the pairing file comes back from the Keychain (and the
@@ -319,7 +342,7 @@ final class AppModel {
         host.onWake { [weak self] in Task { @MainActor in self?.wakeRunner() } }
         host.onWarmUp { [weak self] in Task { @MainActor in self?.warmInProcess("an agent connected") } }
         if automationPath == .inProcess {
-            host.onRetry { [weak self] in Task { @MainActor in self?.warmInProcess("an agent's call while the session was not open") } }
+            host.onRetry { [weak self] in Task { @MainActor in self?.requestAutomationForTask("an agent's call while the session was not open") } }
         }
         // Allow and Deny on the Live Activity run in this process and come straight here.
         ApprovalIntentBridge.install { [weak self] decision in
@@ -438,19 +461,8 @@ final class AppModel {
     /// connects, and when an agent's call finds the last try failed. prepare is idempotent: a session
     /// already open answers "reused" in milliseconds.
     func warmInProcess(_ why: String) {
-        guard automationPath == .inProcess, sessionOn, runner.isRunning else { return }
+        guard automationPath == .inProcess, sessionOn, runner.isRunning, automationRequested || probeDriven else { return }
         if InProcessWDA.automationDeclined { return }
-        // The first open since the iPhone restarted is what brings up iOS's passcode screen: with
-        // Poki in front, the owner is told just before it (Continue opens; elsewhere the Live
-        // Activity asks for the passcode once an open takes 5 s).
-        if passcodeExpected, passcodeHeadsUpSeen != BootClock.current, inFront, !Self.onSimulator, !inProcessWarming {
-            if passcodeHeldOpen == nil {
-                log.add("runner", "first automation since this iPhone restarted: telling the owner iOS will ask for the passcode")
-            }
-            passcodeHeldOpen = why
-            passcodeHeadsUp = true
-            return
-        }
         if inProcessWarming {
             guard Date().timeIntervalSince(inProcessWarmStarted) > Self.staleOpen else { return }
             log.add("runner", "the in-process open under way has not answered in \(Int(Self.staleOpen)) s: asking again for \(why)")
@@ -765,16 +777,6 @@ final class AppModel {
             if inFront { relaunchNotice = true } else { relaunchForFreshSession() }
             return
         }
-        // The first automation after a restart (or ever) brings up iOS's own passcode screen. With
-        // Poki in front, the owner is told first that it is expected and that Poki cannot see it.
-        // Start asks for everything at once: the note now, and on Continue the session's first open
-        // (warmInProcess, as soon as the launcher is ready), which brings up iOS's passcode screen.
-        if passcodeExpected, passcodeHeadsUpSeen != BootClock.current, inFront, !Self.onSimulator {
-            passcodeHeadsUpReconnect = reconnectLocal
-            passcodeHeadsUp = true
-            log.add("runner", "no automation since this iPhone restarted: telling the owner iOS will ask for the passcode")
-            return
-        }
         if setup.loopback == .none {
             problem = "Choose and enable a local connection first (Setup)."
             return
@@ -911,6 +913,7 @@ final class AppModel {
     }
 
     func stopSession() {
+        automationRequested = false
         sessionStartTask?.cancel()
         wantsOn = false
         guard sessionOn else {
@@ -1107,7 +1110,7 @@ final class AppModel {
         passcodeHint = inProcessPasscode || runner.state == "launching" && launchingSince.map { now.timeIntervalSince($0) > 10 } == true
         // On both paths the automation (the runner, or the in-process session) ends after the idle
         // time, so iOS's banner shows only while an agent works; the next request starts it again.
-        guard sessionOn, !runnerPaused, idleStopSeconds > 0, approvals.isEmpty, activityText == "Idle" else { return }
+        guard sessionOn, activity.state.agentTask?.active != true, !runnerPaused, idleStopSeconds > 0, approvals.isEmpty, activityText == "Idle" else { return }
         if now.timeIntervalSince(lastAgentActivity) >= Double(idleStopSeconds) {
             let reason = "Stopped after \(idleStopSeconds / 60 > 0 ? "\(idleStopSeconds / 60) min" : "\(idleStopSeconds) s") without agent activity"
             // The task is over: the phone goes back to the app it began in while the runner can still
@@ -1216,10 +1219,12 @@ final class AppModel {
         }
         runner = status
         host.update(runner: coreState(of: status))
-        // On the in-process path the session is opened as soon as the launcher is ready, so the
-        // owner's one-time Automation Mode passcode comes when they turn Poki on, not mid-task, and
-        // the first look finds it open.
+        // Open an in-process session only after a real phone tool requests automation;
+        // ordinary app visits stay quiet even when the launcher is ready.
         if status.state == "running" { warmInProcess("the launcher is ready") }
+        // The external-display task has its own lifecycle. A separate primary-display transport
+        // becoming idle or failing must not replace its progress or image.
+        if activity.state.agentTask?.background == true, activity.state.agentTask?.active == true { return }
         if status.state == "failed" {
             let title = Self.problemText(code: status.code, fix: status.fix ?? status.detail ?? "The runner stopped")
             activity.update { $0.phase = .problem; $0.label = "Runner Stopped"; $0.headline = title }
@@ -1263,13 +1268,19 @@ final class AppModel {
             log.add("agent", "started: \(summary)")
             if problem?.hasPrefix("An approval ran out") == true { problem = nil }
             let caller = currentCaller
-            activity.update { state in
-                if state.approval == nil {
-                    if state.phase != .working || state.since == nil { state.since = Date() }
-                    state.phase = .working
+            if activity.state.agentTask?.background != true || activity.state.agentTask?.active != true {
+                activity.stepStarted(StepLabels.withoutTypedText(summary))
+                activity.update { state in
+                    if state.agentTask?.active == false {
+                        state.agentTask = nil; state.snapshotID = nil; state.snapshotAt = nil; state.thumbnailVersion = 0
+                    }
+                    if state.approval == nil {
+                        if state.phase != .working || state.since == nil { state.since = Date() }
+                        state.phase = .working
+                    }
+                    state.headline = summary
+                    state.caller = caller
                 }
-                state.headline = summary
-                state.caller = caller
             }
         case .toolFinished(let summary, let delivery, let app, let thumbnail, let error, _):
             lastAgentActivity = Date(); lastStepAt = Date()
@@ -1286,9 +1297,11 @@ final class AppModel {
                                  session: SessionStore.shared.activeSessionID ?? (chat?.running == true ? chat?.sessionID : nil),
                                  caller: currentCaller)
             if recentSteps.count > 20 { recentSteps.removeFirst(recentSteps.count - 20) }
-            activity.record(step: summary, ok: !failed)
-            activity.update { state in state.app = app ?? state.app }
-            activity.setThumbnail(thumbnail)
+            if activity.state.agentTask?.background != true || activity.state.agentTask?.active != true {
+                activity.record(step: StepLabels.withoutTypedText(summary), ok: !failed)
+                activity.update { state in state.app = app ?? state.app }
+                activity.setThumbnail(thumbnail)
+            }
         case .approvalRequested(let approval) where ApprovalClassifier.isOn:
             // The chat model decides, out of sight: no Live Activity card, no notification, no tap.
             approvals.append(approval)
@@ -1352,6 +1365,7 @@ final class AppModel {
     }
 
     func runTool(_ name: String, arguments: String) async -> PokiCore.ToolAnswer {
+        if name == "look" || name == "do" { requestAutomationForTask("a phone tool") }
         if probeDriven { return await core.callTool(name, arguments: arguments) }
         if !sessionOn { startSession() }
         guard sessionOn else {
@@ -1380,7 +1394,7 @@ final class AppModel {
         CFNotificationCenterAddObserver(center, observer, { _, observer, _, _, _ in
             guard let observer else { return }
             let model = Unmanaged<AppModel>.fromOpaque(observer).takeUnretainedValue()
-            Task { @MainActor in model.pauseRunner(reason: "Stopped from the Live Activity") }
+            Task { @MainActor in model.stopAgentFromLiveActivity() }
         }, ApprovalMailbox.stopRunner as CFString, nil, .deliverImmediately)
         CFNotificationCenterAddObserver(center, observer, { _, observer, _, _, _ in
             guard let observer else { return }

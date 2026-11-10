@@ -9,8 +9,8 @@ import Foundation
 /// the app writes it to the App Group container and the state carries only its version.
 struct PokiActivityAttributes: ActivityAttributes {
     struct ContentState: Codable, Hashable {
-        /// `done` is set by ActivityController itself when the agent has been quiet for a while after a
-        /// run of steps; `deciding` by AppModel the moment Allow or Deny is tapped on the Live Activity,
+        /// `done` follows the chat’s explicit result (legacy external sessions use a quiet-period
+        /// heuristic); `deciding` by AppModel the moment Allow or Deny is tapped on the Live Activity,
         /// until PokiCore has the answer. `handoff`: the agent cannot act on this screen (a passcode, a
         /// verification, a payment) and the person has to; the agent keeps polling meanwhile. See `Handoff`.
         enum Phase: String, Codable, Hashable {
@@ -56,6 +56,11 @@ struct PokiActivityAttributes: ActivityAttributes {
         /// A short-lived event ("Started", "Now in WeChat", "Allowed") shown as the status word for a few
         /// seconds. ActivityController clears it.
         var event: Event?
+        /// Optional so activities created by an earlier version still decode.
+        var agentTask: AgentTask?
+        /// Immutable App Group image; the state never carries image bytes or a file-system path.
+        var snapshotID: String?
+        var snapshotAt: Date?
 
         static let outcomeLimit = 12
     }
@@ -81,6 +86,55 @@ struct PokiActivityAttributes: ActivityAttributes {
         var title: String
     }
     var deviceName: String
+}
+
+extension PokiActivityAttributes {
+    struct AgentTask: Codable, Hashable {
+        struct Step: Codable, Hashable {
+            enum Status: String, Codable, Hashable { case running, done, failed, stopped }
+            var title: String
+            var status: Status
+        }
+        var id: UUID
+        var background: Bool
+        var active = true
+        var thinking = true
+        var stopped: Bool?
+        var stage: String?
+        var current: Int?
+        var total: Int?
+        var steps: [Step] = []
+
+        /// A short operation label, never a raw argument payload or model reasoning.
+        static func label(_ text: String) -> String {
+            let clean = text
+                .replacingOccurrences(of: #"(?i)(?:sk-[a-z0-9_-]{12,}|bearer\s+\S+)"#, with: "…", options: .regularExpression)
+                .replacingOccurrences(of: #"[\r\n\t]+"#, with: " ", options: .regularExpression)
+            var result = ""
+            for character in clean {
+                guard result.utf8.count + String(character).utf8.count <= 120 else { break }
+                result.append(character)
+            }
+            return result
+        }
+
+        mutating func start(_ title: String) {
+            if steps.last?.status == .running { steps[steps.count - 1].status = .stopped }
+            steps.append(Step(title: Self.label(title), status: .running))
+            steps = Array(steps.suffix(3))
+            thinking = false
+        }
+        mutating func complete(_ title: String, ok: Bool) {
+            let title = Self.label(title)
+            if steps.last?.status == .running, steps.last?.title == title {
+                steps[steps.count - 1].status = ok ? .done : .failed
+            } else {
+                steps.append(Step(title: title, status: ok ? .done : .failed))
+                steps = Array(steps.suffix(3))
+            }
+            thinking = true
+        }
+    }
 }
 
 struct PendingApproval: Codable, Hashable {
@@ -109,5 +163,9 @@ enum SharedContainer {
     static let appGroup = Bundle.main.object(forInfoDictionaryKey: "PokiAppGroup") as? String ?? "group.nz.zheha.poki"
     static var url: URL? { FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup) }
     static var thumbnailURL: URL? { url?.appendingPathComponent("activity-thumbnail.jpg") }
+    static func snapshotURL(_ id: String?) -> URL? {
+        guard let id, UUID(uuidString: id) != nil else { return nil }
+        return url?.appendingPathComponent("activity-snapshots").appendingPathComponent(id + ".jpg")
+    }
     static var defaults: UserDefaults { UserDefaults(suiteName: appGroup) ?? .standard }
 }

@@ -117,7 +117,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "后台运行"
+            "value" : "后台执行"
           }
         }
       }
@@ -1276,6 +1276,149 @@
           }
         }
       }
+    },
+    "Thinking" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考中"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "On screen" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前台执行"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Latest screen" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最新画面"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Task failed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "任务未完成"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Open Poki for details" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开 Poki 查看详情"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Waiting for you" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待你继续"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Finding apps" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查找应用"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Opening app" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开应用"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Tapping a button" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "点击按钮"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Entering text" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "输入文字"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Scrolling" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "滚动页面"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Waiting for screen" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待画面"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Reading screen" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读取画面"
+          }
+        }
+      },
+      "extractionState" : "manual"
     }
   },
   "version" : "1.0"
