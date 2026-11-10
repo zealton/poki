@@ -267,6 +267,14 @@ static NSArray<NSString *> *SRSelectorsWith(Class cls, NSString *part) {
 #endif
     for (NSString *path in paths) {
         if ([_loaded containsObject:path]) continue;
+        // Some developer images omit Swift Testing interoperability. The required XCTest
+        // frameworks below still have to load (including their own dependencies) and expose
+        // the session APIs; an absent interoperability shim alone need not prevent that.
+        if ([path.lastPathComponent isEqualToString:@"lib_TestingInterop.dylib"] &&
+            ![NSFileManager.defaultManager fileExistsAtPath:path]) {
+            NSLog(@"SRNativeSession: developer image has no Swift Testing interoperability shim");
+            continue;
+        }
         if (!dlopen(path.UTF8String, RTLD_NOW | RTLD_GLOBAL)) {
             SRFail(error, @"developer_framework_unavailable"); return nil;
         }
