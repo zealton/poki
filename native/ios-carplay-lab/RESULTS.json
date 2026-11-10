@@ -1,0 +1,31 @@
+{
+  "runtime": "Xcode 26.2 / iOS 26.2 Simulator",
+  "target": "original Simulator MobileSafari",
+  "actualTestStarted": true,
+  "searchQueryTypedDuringUserTyping": true,
+  "imagesPageLoadedDuringUserTyping": true,
+  "overlappingNativeGestures": 3,
+  "userTextLength": 1416,
+  "userTextExact": true,
+  "userFocusAtEnd": true,
+  "userActiveAtEnd": 1,
+  "userInterruptionEvents": 0,
+  "approachSucceeded": true,
+  "realDeviceVerified": false,
+  "arbitraryInstalledAppsVerified": false,
+  "chineseUserIMEVerified": false,
+  "userTypingDurationSeconds": 23.54880714416504,
+  "scrollOffsetBefore": "{0, 0}",
+  "scrollOffsetAfter": "{0, 692}",
+  "executor": "deterministic adaptive driver, not an LLM run",
+  "targetScenePreparedBeforeTyping": true,
+  "originalSafariBinarySHA256": "65fcdb30b82aef3a163c67650d0fdf2373fc7ab18e1be10319e75dacc5c7437c",
+  "originalSafariBinaryHashUnchanged": true,
+  "packagedSourceRepeat": {
+    "approachSucceeded": true,
+    "userTextLength": 1416,
+    "userTextExact": true,
+    "userInterruptionEvents": 0,
+    "typingDurationSeconds": 23.56192111968994
+  }
+}
