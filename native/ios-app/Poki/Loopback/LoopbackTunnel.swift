@@ -14,14 +14,14 @@ final class LoopbackTunnel {
     }
     private(set) var busy = false
     private var manager: NETunnelProviderManager?
-    private var statusObserver: NSObjectProtocol?
-    private var connectionDeadline: Task<Void, Never>?
+    @ObservationIgnored private var statusObserver: NSObjectProtocol?
+    @ObservationIgnored private var connectionDeadline: Task<Void, Never>?
     /// After the tunnel failed or dropped without the owner ending it, dial again with a backoff and a
     /// cap (GitHub issue 44: it stayed down for 101 s and 134 s until someone opened Poki). The
     /// owner's own Disconnect, or Turn off, ends it for good until they connect again; so does another
     /// VPN being detected when a try comes (best effort: a VPN that sets no proxy, such as Tailscale, may not be detected). Opening Poki dials nothing.
     private var reconnect = ReconnectPlan()
-    private var reconnectTask: Task<Void, Never>?
+    @ObservationIgnored private var reconnectTask: Task<Void, Never>?
     private var reconnecting = false
     /// When Poki itself last stopped the tunnel. The tunnel hears that as a stop by the user, and its
     /// "stopped on purpose" notification must not cancel the retry Poki queued right after.
@@ -56,7 +56,10 @@ final class LoopbackTunnel {
         }
     }
 
-    isolated deinit {
+    // Cleanup uses thread-safe cancellation and observer removal, not UI state. Avoid the Swift
+    // isolated-deinit back-deployment path that aborts in TaskLocal::StopLookupScope on iOS 26.2
+    // during synchronous destruction (swiftlang/swift#85663). These tokens need no observation.
+    nonisolated deinit {
         connectionDeadline?.cancel()
         reconnectTask?.cancel()
         CFNotificationCenterRemoveEveryObserver(CFNotificationCenterGetDarwinNotifyCenter(), Unmanaged.passUnretained(self).toOpaque())

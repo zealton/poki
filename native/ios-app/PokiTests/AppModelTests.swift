@@ -2,6 +2,22 @@ import PokiCore
 import XCTest
 @testable import Poki
 
+/// Synchronous destruction used to crash in the isolated-deinit runtime on the iOS 26.2 Simulator.
+@MainActor
+final class LoopbackLifetimeTests: XCTestCase {
+    func testRepeatedSynchronousTunnelDestructionReleasesEveryInstance() {
+        for _ in 0..<200 {
+            weak var released: LoopbackTunnel?
+            autoreleasepool {
+                let tunnel = LoopbackTunnel()
+                released = tunnel
+                XCTAssertNotNil(released)
+            }
+            XCTAssertNil(released, "Observers and tasks must not retain the tunnel after its owner exits")
+        }
+    }
+}
+
 /// A launcher that records what the app asked of it and plays back runner events.
 final class FakeLauncher: RunnerLauncher, @unchecked Sendable {
     var starts = 0, restarts = 0, stops = 0
@@ -289,6 +305,12 @@ final class InProcessPasscodeTests: XCTestCase {
         session.answer(["ok": false, "code": "com.apple.dt.XCTest.XCTFuture 1000", "detail": "Timed out while enabling automation mode.", "seconds": 60.0])
         await waitFor("iOS gave up on the passcode") { !self.model.passcodeHint && !self.model.host.currentRunner.describe.hasPrefix("starting") }
         let failed = model.host.currentRunner.describe
-        XCTAssertTrue(failed.contains("owner needs to enter the iPhone passcode"), failed)
+        // After the prompt expires, the owner must explicitly restart automation; the waiting
+        // message above applies only while iOS is still asking.
+        guard case .failed(_, .some(let fix)) = model.host.currentRunner else {
+            return XCTFail("Expected failed automation after the unanswered passcode prompt: \(failed)")
+        }
+        XCTAssertTrue(fix.contains("off and on"), fix)
+        XCTAssertTrue(fix.contains("passcode"), fix)
     }
 }

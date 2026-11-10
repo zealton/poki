@@ -76,12 +76,13 @@ final class NativeServicesWDATests: XCTestCase {
         let points = try wda.finger(source)
 
         XCTAssertEqual(points.count, 3)
-        XCTAssertEqual(points[0]["x"] as? Int, 16_424)
+        // Screen endpoints map to 0...65535: round(100.25 / 400 * 65535) = 16425.
+        XCTAssertEqual(points[0]["x"] as? Int, 16_425)
         XCTAssertEqual(points[0]["y"] as? Int, 16_404)
         XCTAssertEqual(points[0]["time_ms"] as? Double, 0)
-        XCTAssertEqual(points[1]["x"] as? Int, 16_424)
+        XCTAssertEqual(points[1]["x"] as? Int, 16_425)
         XCTAssertEqual(points[1]["time_ms"] as? Double, 30)
-        XCTAssertEqual(points[2]["x"] as? Int, 16_671)
+        XCTAssertEqual(points[2]["x"] as? Int, 16_670)
         XCTAssertEqual(points[2]["y"] as? Int, 16_527)
         XCTAssertEqual(points[2]["time_ms"] as? Double, 75)
     }
