@@ -49,6 +49,7 @@ static NSString *ReadKey(void) {
 @property NSDictionary *lastState;
 @property BOOL starting, connecting, polling, preparing;
 @property BOOL testAutostart;
+@property NSInteger launchGeneration;
 @property AVPictureInPictureController *pip;
 @property AVPictureInPictureVideoCallViewController *pipVC;
 @end
@@ -484,6 +485,7 @@ static NSString *ReadKey(void) {
         return;
     }
     self.starting = YES;
+    NSInteger generation = ++self.launchGeneration;
     self.runID = NSUUID.UUID.UUIDString;
     NSDictionary *config = @{
         @"run" : self.runID,
@@ -498,6 +500,8 @@ static NSString *ReadKey(void) {
                                run:self.runID
                              reply:^(BOOL accepted) {
                                  dispatch_async(dispatch_get_main_queue(), ^{
+                                     if (generation != self.launchGeneration)
+                                         return;
                                      if (!accepted) {
                                          self.starting = NO;
                                          self.status.text = @"客体拒绝授权";
@@ -508,6 +512,8 @@ static NSString *ReadKey(void) {
                                               credential:key
                                                    reply:^(NSDictionary *state) {
                                                        dispatch_async(dispatch_get_main_queue(), ^{
+                                                           if (generation != self.launchGeneration)
+                                                               return;
                                                            self.starting = NO;
                                                            self.lastState = state;
                                                            [self showState:state];
@@ -534,6 +540,8 @@ static NSString *ReadKey(void) {
     [self revoke:@"stop"];
 }
 - (void)revoke:(NSString *)command {
+    self.launchGeneration++;
+    self.starting = NO;
     if (self.runID)
         [[self target] setRun:self.runID
                       enabled:NO

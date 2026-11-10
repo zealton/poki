@@ -114,7 +114,8 @@ licenses = resources / 'Licenses'
 licenses.mkdir()
 for source, name in [(ROOT.parents[1] / 'LICENSE', 'Poki-AGPL.txt'),
                      (runtime / 'LICENSE', 'LiveContainer-AGPL.txt'),
-                     (runtime / 'litehook/LICENSE', 'litehook-LICENSE.txt')]:
+                     (runtime / 'litehook/LICENSE', 'litehook-LICENSE.txt'),
+                     (ROOT / 'Licenses/OpenSSL-LICENSE.txt', 'OpenSSL-LICENSE.txt')]:
     if source.exists():
         shutil.copyfile(source, licenses / name)
 (resources / 'NOTICE.txt').write_text(

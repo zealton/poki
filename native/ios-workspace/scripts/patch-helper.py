@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Apply LiveContainer's executable-to-dylib transform to our own ARM64 Simulator fixture.
 Derived from LCPatchExecSlice, LiveContainer commit 9d6ea09b; AGPL-3.0.
-Only accepts GuestFixture, retains LC_MAIN, and requires linker header padding.
+Only accepts our PokiFixture / PokiWorker helpers, retains LC_MAIN, and requires header padding.
 The caller must ad-hoc re-sign the modified fixture with macOS codesign.
 """
 import struct,sys
