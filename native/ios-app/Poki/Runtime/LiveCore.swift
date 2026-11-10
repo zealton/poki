@@ -16,6 +16,7 @@ final class LiveCore: CoreSession {
     init(host: AppCoreHost, transport: HTTPTransport) {
         self.host = host
         var config = CoreConfig()
+        config.userRoutineLearning = { UserDefaults.standard.bool(forKey: "poki.experimental.userRoutines") }
         // Signing tools may rename the app; its own id is Poki too.
         if let own = Bundle.main.bundleIdentifier { config.ownApps.append(own) }
         // Sensitive steps wait for the owner unless they turned asking off in Agents › Approvals; the

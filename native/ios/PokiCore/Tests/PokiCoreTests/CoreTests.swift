@@ -1015,6 +1015,21 @@ final class ReturnToOriginTests: XCTestCase {
         XCTAssertEqual(front.value, "com.apple.weather", "the task is over: a second finish moves nothing")
     }
 
+    func testFinishingFromTheAppDuringOwnerTakeoverKeepsTheCurrentApp() async {
+        let (core, wda, _) = makeCore()
+        let front = phone(wda, front: "ai.x.grok")
+        _ = await core.call("look", [:])
+        _ = await core.call("do", ["actions": [["launch": "com.apple.weather"]]])
+        let takeover = Handoff(id: "takeover", kind: "other", text: "Editing", requested: Date(), ownerOnly: true)
+        core.computer.handoff.value = takeover
+        let before = wda.sent.count
+        let finish = await core.finishTask()
+        XCTAssertEqual(front.value, "com.apple.weather")
+        XCTAssertEqual(wda.sent.count, before, "Task cleanup must send no commands during owner takeover")
+        XCTAssertEqual(core.handoff?.id, takeover.id)
+        XCTAssertTrue(finish?.contains("stays in front") == true)
+    }
+
     /// The owner stopped the runner: a client's DELETE afterwards must not send requests to the
     /// stopped runner, whose misses would start it again.
     func testATaskDroppedWithoutSwitchingSendsNothingLater() async throws {

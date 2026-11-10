@@ -34,7 +34,7 @@ final class ActivityController {
     private(set) var state = PokiState(phase: .idle, headline: "Waiting for agent", thumbnailVersion: 0)
     private(set) var lastError: String?
 
-    /// After this long without a new step, a run of steps counts as finished.
+    /// Legacy external sessions have no model-task boundary; infer their completion after this quiet period.
     var finishAfter: Duration = .seconds(15)
     /// How long the finished run stays before the activity folds back to Ready.
     var foldAfter: Duration = .seconds(30)
@@ -57,6 +57,56 @@ final class ActivityController {
     private var inStep = false
     private var runAnnounced = false
     private var justRecorded = false
+    private let snapshotDirectory: URL?
+
+    init(snapshotDirectory: URL? = SharedContainer.url?.appendingPathComponent("activity-snapshots")) {
+        self.snapshotDirectory = snapshotDirectory
+    }
+
+    func beginAgentTask(_ id: UUID, background: Bool) {
+        finishTimer?.cancel(); foldTimer?.cancel()
+        update {
+            $0.agentTask = .init(id: id, background: background)
+            $0.snapshotID = nil; $0.snapshotAt = nil; $0.thumbnailVersion = 0
+            $0.stepCount = 0; $0.failedCount = 0; $0.outcomes = []; $0.endedAt = nil
+            $0.since = Date(); $0.app = nil
+            if !$0.phase.holdsApproval, $0.handoff == nil { $0.phase = .working; $0.headline = String(activity: "Thinking") }
+        }
+    }
+
+    func agentPlan(_ id: UUID, steps: [String], current: Int) {
+        guard state.agentTask?.id == id, state.agentTask?.active == true, steps.indices.contains(current - 1) else { return }
+        update {
+            $0.agentTask?.stage = PokiActivityAttributes.AgentTask.label(steps[current - 1])
+            $0.agentTask?.current = current; $0.agentTask?.total = steps.count
+        }
+    }
+
+    func stepStarted(_ title: String) {
+        update { $0.agentTask?.start(title) }
+    }
+
+    /// An explicit model-task boundary; an API response taking 15 seconds is not a completed task.
+    func endAgentTask(_ id: UUID, success: Bool?, stopped: Bool) {
+        guard state.agentTask?.id == id, state.agentTask?.active == true else { return }
+        finishTimer?.cancel(); eventTimer?.cancel()
+        update {
+            $0.event = nil
+            $0.agentTask?.active = false; $0.agentTask?.thinking = false; $0.agentTask?.stopped = stopped
+            if var task = $0.agentTask, task.steps.last?.status == .running {
+                task.steps[task.steps.count - 1].status = stopped ? .stopped : .failed
+                $0.agentTask = task
+            }
+            guard !$0.phase.holdsApproval, $0.handoff == nil else { return }
+            $0.endedAt = Date()
+            if success == true, !stopped, var task = $0.agentTask { task.current = task.total; $0.agentTask = task }
+            if stopped { $0.phase = .idle; $0.headline = String(activity: "Stopped") }
+            else if success == true { $0.phase = .done; $0.headline = "Finished" }
+            else if success == false { $0.phase = .problem; $0.label = String(activity: "Task failed"); $0.headline = String(activity: "Open Poki for details") }
+            else { $0.phase = .idle; $0.headline = String(activity: "Waiting for you") }
+        }
+        if state.phase == .done { armFold() }
+    }
 
     var enabled: Bool { ActivityAuthorizationInfo().areActivitiesEnabled }
 
@@ -101,6 +151,7 @@ final class ActivityController {
             if state.outcomes.count > PokiState.outcomeLimit { state.outcomes.removeFirst(state.outcomes.count - PokiState.outcomeLimit) }
             state.stepCount += 1
             if !ok { state.failedCount += 1 }
+            state.agentTask?.complete(text, ok: ok)
         }
         justRecorded = true
     }
@@ -119,6 +170,7 @@ final class ActivityController {
         let policy: ActivityUIDismissalPolicy = final == nil ? .immediate : .after(.now.addingTimeInterval(15 * 60))
         state.outcomes = []; state.guide = nil; state.pin = nil; state.since = nil; state.event = nil
         state.stepCount = 0; state.failedCount = 0; state.endedAt = nil; state.decision = nil
+        state.agentTask = nil; state.snapshotID = nil; state.snapshotAt = nil; state.thumbnailVersion = 0
         let previous = tail
         tail = Task { await previous?.value; await activity.end(final, dismissalPolicy: policy) }
     }
@@ -127,7 +179,11 @@ final class ActivityController {
         let old = state
         change(&state)
         ActivityUpdatePolicy.settle(&state, over: old)
-        let alert = transition(from: old)
+        let proposed = transition(from: old)
+        // Progress, completion and errors in an isolated task must not expand over the owner's app.
+        let quietBackground = state.agentTask?.background == true && !state.phase.holdsApproval && state.handoff == nil
+        let alert = quietBackground ? nil : proposed
+        if quietBackground { attention = nil }
         // Something needs the person and there is no Live Activity to pop up: a banner instead (an
         // approval and a pairing code have their own).
         if let banner = attention, activity == nil {
@@ -140,11 +196,22 @@ final class ActivityController {
     /// The hand-off or problem this change pops up for (`update` posts a banner when no activity runs).
     private var attention: (title: String, body: String)?
 
-    /// Writes a thumbnail, at most about 160 points wide, to the App Group container for the widget.
+    /// Writes a versioned thumbnail, at most 240 pixels wide, to the widget’s App Group container.
     func setThumbnail(_ jpeg: Data?) {
-        guard let jpeg, let url = SharedContainer.thumbnailURL, let small = Self.shrink(jpeg, maxPixels: 260) else { return }
-        try? small.write(to: url, options: .atomic)
-        update { $0.thumbnailVersion += 1 }
+        guard let jpeg, let directory = snapshotDirectory, let small = Self.shrink(jpeg, maxPixels: 240) else { return }
+        let id = UUID().uuidString
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try small.write(to: directory.appendingPathComponent(id + ".jpg"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        } catch { return }
+        update { $0.thumbnailVersion += 1; $0.snapshotID = id; $0.snapshotAt = Date() }
+        // Bound disk use while retaining old frames long enough for coalesced widget updates.
+        let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        let ordered = files.filter { $0.pathExtension == "jpg" }.sorted {
+            ((try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) >
+            ((try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast)
+        }
+        for old in ordered.dropFirst(12) { try? FileManager.default.removeItem(at: old) }
     }
 
     // MARK: Transitions
@@ -217,7 +284,7 @@ final class ActivityController {
         }
         if state.stepCount != old.stepCount { inStep = false }
         // The finish timer: re-armed by every change during a run; never fires in the middle of a step.
-        if state.phase == .working, state.approval == nil, state.handoff == nil, state.stepCount > 0 { armFinish() } else { finishTimer?.cancel() }
+        if state.phase == .working, state.agentTask?.active != true, state.approval == nil, state.handoff == nil, state.stepCount > 0 { armFinish() } else { finishTimer?.cancel() }
         return alert
     }
 
@@ -237,7 +304,7 @@ final class ActivityController {
     }
 
     private func finishRun(ifCount count: Int) {
-        guard state.phase == .working, state.approval == nil, !inStep, state.stepCount == count, count > 0 else { return }
+        guard state.phase == .working, state.agentTask?.active != true, state.approval == nil, !inStep, state.stepCount == count, count > 0 else { return }
         state.phase = .done
         runAnnounced = false
         state.endedAt = Date()
@@ -260,6 +327,7 @@ final class ActivityController {
                 state.headline = "Waiting for agent"
                 state.outcomes = []; state.stepCount = 0; state.failedCount = 0
                 state.since = nil; state.endedAt = nil; state.event = nil
+                state.agentTask = nil; state.snapshotID = nil; state.snapshotAt = nil; state.thumbnailVersion = 0
             }
         }
     }
@@ -320,6 +388,18 @@ final class ActivityController {
     /// Updates go out one after another, so an alert is never overtaken by an older update.
     private func enqueue(_ content: ActivityContent<PokiState>, alert: AlertConfiguration?) {
         guard let activity else { return }
+        #if DEBUG && targetEnvironment(simulator)
+        if UserDefaults.standard.bool(forKey: "pokiActivityEvidence"),
+           let data = try? JSONEncoder().encode(content.state),
+           let value = try? JSONSerialization.jsonObject(with: data),
+           let entry = try? JSONSerialization.data(withJSONObject: ["at": Date().timeIntervalSince1970, "state": value, "alert": alert != nil]) {
+            let file = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("activity-evidence.jsonl")
+            if !FileManager.default.fileExists(atPath: file.path) { FileManager.default.createFile(atPath: file.path, contents: nil) }
+            if let handle = try? FileHandle(forWritingTo: file) {
+                _ = try? handle.seekToEnd(); try? handle.write(contentsOf: entry + Data([10])); try? handle.close()
+            }
+        }
+        #endif
         let previous = tail
         tail = Task {
             await previous?.value

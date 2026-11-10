@@ -1,3 +1,6 @@
+#[path = "ax_direct.rs"]
+mod direct;
+pub use direct::Direct;
 use super::Result;
 use idevice::{
     ReadWrite,
@@ -203,6 +206,7 @@ impl Archive {
         let d = value.as_dictionary()?;
         for key in [
             "NS.string",
+            "NSString",
             "NS.relative",
             "NS.rectval",
             "NS.pointval",
@@ -272,6 +276,14 @@ impl Tree {
         let Some(result) = a.field(root, "resultData") else {
             return Ok(());
         };
+        // Native cache protocol: initial frames replace the graph; additional
+        // frames enrich it. Merging an initial frame preserves stale candidates.
+        // https://github.com/ipbtools/ipb/blob/main/docs/protocol.md
+        let dump_type = a.field(result, "treeDumpType").and_then(|v| a.string(v));
+        if matches!(dump_type.as_deref(), Some("AXPTreeDumpTypeInitialDump" | "AXPTreeDumpTypeTreeDestroyed")) {
+            let include_offscreen = self.include_offscreen;
+            *self = Self { include_offscreen, ..Self::default() };
+        }
         let Some(dump) = a.field(result, "treeDump") else {
             return Ok(());
         };
@@ -321,7 +333,10 @@ impl Tree {
                                     53 => "value",
                                     _ => "url",
                                 };
-                                if attribute == 3 && node.fields.contains_key("label") {
+                                // Prefer the spoken label only when this update supplies it.
+                                // A label cached from an earlier composition must not hide
+                                // the new candidate occupying the same AX object.
+                                if attribute == 3 && a.entries(data).iter().any(|(key, _)| a.integer(key) == Some(33)) {
                                     continue;
                                 }
                                 let text = a
@@ -579,8 +594,69 @@ async fn acknowledge(socket: &mut impl ReadWrite, message: &Message) -> Result<(
         ),
         PayloadHeader::default(),
         None,
-        None,
+        (message.data.as_ref().and_then(Value::as_string) == Some("hostAPIVersion")).then(|| Value::from(7)),
     );
     socket.write_all(&reply.serialize()).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::*;
+    fn frame(kind: &str) -> Archive {
+        let result = Value::Dictionary(plist::Dictionary::from_iter([
+            ("treeDumpType".to_string(), kind.into()), ("treeDump".to_string(), Value::Array(vec![])),
+        ]));
+        let root = Value::Dictionary(plist::Dictionary::from_iter([
+            ("associatedRequestType".to_string(), 11.into()), ("resultData".to_string(), result),
+        ]));
+        Archive { value: Value::Dictionary(plist::Dictionary::from_iter([
+            ("$objects".to_string(), Value::Array(vec!["$null".into(), root])),
+            ("$top".to_string(), Value::Dictionary(plist::Dictionary::from_iter([("root".to_string(), Value::Uid(plist::Uid::new(1)))]))),
+        ])) }
+    }
+    fn prior_tree() -> Tree {
+        let mut tree = Tree { include_offscreen: true, ..Tree::default() };
+        tree.roots.push((42, Some(7)));
+        tree.nodes.insert(42, Node::default());
+        tree
+    }
+    #[test]
+    fn reused_candidate_receives_new_label() {
+        let mut update = frame("AXPTreeDumpTypeAdditionalData");
+        let objects = update.value.as_dictionary_mut().unwrap().get_mut("$objects").unwrap().as_array_mut().unwrap();
+        let root = objects[1].as_dictionary_mut().unwrap();
+        let result = root.get_mut("resultData").unwrap().as_dictionary_mut().unwrap();
+        result.insert("treeDump".into(), Value::Array(vec![Value::Dictionary(plist::Dictionary::from_iter([
+            ("associatedRequestType".to_string(), 5.into()),
+            ("associatedTranslationObject".to_string(), Value::Dictionary(plist::Dictionary::from_iter([("objectID".to_string(), Value::from(42))]))),
+            ("resultData".to_string(), Value::Dictionary(plist::Dictionary::from_iter([
+                ("NS.keys".to_string(), Value::Array(vec![3.into()])),
+                ("NS.objects".to_string(), Value::Array(vec!["你好".into()])),
+            ]))),
+        ]))]));
+        let mut tree = prior_tree();
+        tree.nodes.get_mut(&42).unwrap().fields.insert("label".into(), "今天".into());
+        tree.update(&update).unwrap();
+        assert_eq!(tree.nodes[&42].fields["label"], "你好");
+    }
+    #[test]
+    fn initial_dump_discards_previous_candidates() {
+        let mut tree = prior_tree();
+        tree.update(&frame("AXPTreeDumpTypeInitialDump")).unwrap();
+        assert!(tree.nodes.is_empty() && tree.roots.is_empty());
+        assert!(tree.include_offscreen);
+    }
+    #[test]
+    fn additional_dump_preserves_current_graph() {
+        let mut tree = prior_tree();
+        tree.update(&frame("AXPTreeDumpTypeAdditionalData")).unwrap();
+        assert!(tree.nodes.contains_key(&42));
+    }
+    #[test]
+    fn destroyed_dump_invalidates_current_graph() {
+        let mut tree = prior_tree();
+        tree.update(&frame("AXPTreeDumpTypeTreeDestroyed")).unwrap();
+        assert!(tree.nodes.is_empty() && tree.roots.is_empty());
+    }
 }

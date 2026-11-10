@@ -40,6 +40,7 @@ public struct CoreConfig: Sendable {
     public var humanize: Bool?
     /// The agent's memory (routines and notes); nil uses `RoutineStore.shared`, the app's file.
     public var memory: RoutineStore?
+    public var userRoutineLearning: @Sendable () -> Bool = { false }
 
     public init(runnerURL: URL = URL(string: "http://127.0.0.1:8100")!, sensitive: SensitivityRules = SensitivityRules(), approvalWait: Double = 115, toolDeadline: Double = 25, actionCap: Double = 6, readTimeout: Double = 4, busyWait: Double = 2, runnerWait: Double = 15, treeFormat: String = "xml", ownApps: [String] = ["nz.zheha.poki"], accessibilityDeadline: Double = 2, taskGap: Double = 300, humanize: Bool? = nil) {
         self.accessibilityDeadline = accessibilityDeadline
@@ -231,12 +232,15 @@ public struct Handoff: Sendable, Equatable {
     public var text: String
     public var requested: Date
     public var done: Date?
-    public init(id: String, kind: String, text: String, requested: Date, done: Date? = nil) {
+    /// A user takeover cannot be dismissed by an agent action.
+    public var ownerOnly: Bool
+    public init(id: String, kind: String, text: String, requested: Date, done: Date? = nil, ownerOnly: Bool = false) {
         self.id = id
         self.kind = kind
         self.text = text
         self.requested = requested
         self.done = done
+        self.ownerOnly = ownerOnly
     }
 }
 
@@ -559,7 +563,7 @@ public final class PokiCore: @unchecked Sendable {
         gate.current = "\(name): \(activity.summary)"
         emit(.toolStarted(activity))
         // The owner's time on an approval, and the runner's start, come on top of the tool's own time.
-        let deadline = config.toolDeadline + (name == "do" ? config.approvalWait : 0) + config.runnerWait + 1
+        let deadline = (name == "do" ? computer.toolBudget(args["actions"]?.array ?? []) : config.toolDeadline) + (name == "do" ? config.approvalWait : 0) + config.runnerWait + 1
         var output: ToolResult
         computer.failureLog.value = nil
         do {

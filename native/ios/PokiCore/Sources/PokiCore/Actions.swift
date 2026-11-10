@@ -294,6 +294,9 @@ extension Computer {
             return ("back", try await back(until: until))
         }
         if let spec = action["handoff"] {
+            if let current = handoff.value, current.done == nil, current.ownerOnly {
+                throw ActionFailure(message: "The owner took over typing. Only their Done button can resume actions; the agent cannot replace or dismiss this pause.", delivery: .notSent)
+            }
             if case .bool(false) = spec {
                 guard let current = handoff.value, current.done == nil else { return ("handoff", "handoff: nothing is handed to the owner") }
                 handoff.value = nil
@@ -433,6 +436,15 @@ extension Computer {
     /// answer says what happened. Returns a note for the answer.
     @discardableResult
     func type(_ text: String, clear: Bool, hidden: Bool = false, target: Element? = nil, until: Double = .infinity) async throws -> String {
+        if runner.verifiesNativeTyping {
+            // One composition transaction. Humanized bursts, guessed Backspace counts and
+            // generic retries would change IME state or duplicate a partially committed edit.
+            let value = try await runner.call("POST", "/wda/keys", ["value": .array(text.map { .string(String($0)) }), "clear": .bool(clear)], timeout: max(1, min(Self.nativeTypingBudget(text), until - now())))
+            guard value["textVerified"]?.bool == true else {
+                throw ActionFailure(message: "Native typing was not verified; read the field before continuing", delivery: .unknown)
+            }
+            return "; native field contents verified; simulated keyboard detached"
+        }
         var deletes = 0
         var before: String?
         if clear {

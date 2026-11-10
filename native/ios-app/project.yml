@@ -9,6 +9,7 @@ targets:
     entitlements:
       path: Poki/PokiLocal.entitlements
       properties:
+        # The shared App Group is inherited from project-base.yml.
         com.apple.developer.networking.networkextension: [packet-tunnel-provider]
     dependencies:
       - target: PokiTunnel

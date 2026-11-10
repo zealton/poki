@@ -12,6 +12,8 @@ The installer does the work. You start it, relay its person stops, and report it
 
 ## Before you start
 
+**First-time installation requires Wi-Fi.** Ask the user to connect the iPhone to Wi-Fi and keep it connected until initial setup is complete. If it is on cellular data only, wait for the user to confirm Wi-Fi before starting. This applies to both the checkout installer and Poki Setup's bundled command line tool.
+
 1. Find or make a Poki checkout. In a checkout, `bin/install-iphone.mjs` exists. Otherwise run `git clone --branch standalone https://github.com/JosssphZhou/poki.git` and work in that folder.
 2. Check: a Mac with macOS 14 or later, Node.js 24 or later, an iPhone on iOS 18 or later, a USB data cable, and the user's Apple Account. A free account works with 7-day signing; it must be renewed before it expires. The iPhone also needs a compatible VPN/proxy app that routes 10.7.0.1 back to the iPhone (for example Karing or Shadowrocket configured as Poki's Setup page directs). Xcode is not required. With Xcode installed, the installer can see when Poki opens and give it the model key even with an older Poki Setup. Without Node.js 24, or on Windows, use "Without Node.js, or on Windows" below instead of the checkout.
 3. Ask the user one question: "Should I also give Poki on the iPhone your model API key from this Mac's keychain?" Default is no. On yes, ask which provider (`openai`, `anthropic`, `deepseek`, `gemini` or `openrouter`) and add `--model-key <provider>` below. The installer reads the keychain item `<provider>-api-key` (for example `openai-api-key`; another name with `--model-key-item <item>`). Never read the key yourself and never ask for it in chat.
@@ -23,6 +25,12 @@ From the checkout, start the installer in the background and read its output as 
 ```sh
 node bin/install-iphone.mjs run --json
 ```
+
+For an explicitly requested custom build from this checkout, add `--ipa /absolute/path/Poki-custom.ipa`.
+Put its matching `Poki-signing.zip` beside it (the iOS packaging scripts export the entitlement
+templates). The same installer still handles signing, person stops, pairing, encrypted model-key
+transfer and checks. It hashes the IPA so a changed local build is installed again; it never
+substitutes a released IPA when this option is set. Do not pass a Simulator build as a phone IPA.
 
 Each line is one JSON event with an `at` time:
 

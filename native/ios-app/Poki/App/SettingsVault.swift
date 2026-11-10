@@ -8,7 +8,7 @@ import Foundation
 enum SettingsVault {
     private static let account = "settings.v1"
     /// The settings kept: exact keys and prefixes.
-    private static let keys: Set<String> = ["setup", "relayAddress", "relayEnabled", "voiceBridge", "wantsOn", "automationPath", "chatEngine"]
+    private static let keys: Set<String> = ["setup", "relayAddress", "relayEnabled", "voiceBridge", "wantsOn", "automationPath", "chatEngine", "agent.backgroundExecution"]
     private static let prefixes = ["chat.", "voice.", "models.", "idleStopSeconds"]
 
     private static func kept(_ key: String) -> Bool { keys.contains(key) || prefixes.contains { key.hasPrefix($0) } }

@@ -54,7 +54,9 @@ enum ChatNote: Equatable, Codable {
 @Observable
 final class ChatModel {
     private(set) var entries: [ChatEntry] = [] { didSet { persist() } }
-    private(set) var running = false
+    private(set) var running = false {
+        didSet { executionSettings.setRunning(running, task: executionID) }
+    }
     /// The model has the turn: nothing from it yet since the owner's message or the last tool answer
     /// (the chat shows the typing bubble).
     private(set) var awaitingModel = false
@@ -74,8 +76,44 @@ final class ChatModel {
     /// The model's side of the conversation: pi's loop (ESP-177), or for Anthropic and OpenAI with
     /// `-chatEngine direct`, the provider's own API in its own form.
     private var loop: PiLoop?
+    private(set) var containedSafari = false
+    private var loopContained = false
+    private var loopCarPlay = false
+    private var usingCarPlay = false
+    private let executionSettings: AgentExecutionSettings
+    private let executionID = UUID()
+    var carPlay: Bool { executionSettings.backgroundEnabled }
+    var canChangeExecutionMode: Bool { executionSettings.canChange }
+    var carPlayAvailable: Bool { CarPlayWorkspace.shared.available }
+    func setCarPlay(_ enabled: Bool) {
+        guard executionSettings.setBackgroundEnabled(enabled) else { return }
+        endIsolatedRun()
+        containedSafari = false
+        // Preserve the transcript while keeping tools/context from the old mode out of the next run.
+        loop = nil
+        client = nil
+    }
+    private var usingContained = false
+    private var ownsContainedBackground = false
+    private var interruption: NSObjectProtocol?
+
+    var containedAvailable: Bool { PKContainedWorkspace.shared().available }
+    func setContainedSafari(_ enabled: Bool) {
+        guard canChangeExecutionMode, !enabled || containedAvailable else { return }
+        if enabled { executionSettings.setBackgroundEnabled(false) }
+        newConversation()
+        endIsolatedRun()
+        containedSafari = enabled
+    }
+    private func endIsolatedRun() {
+        CarPlayWorkspace.shared.stop()
+        PKContainedWorkspace.shared().stop()
+        if ownsContainedBackground && !app.sessionOn { app.background.stop() }
+        ownsContainedBackground = false
+    }
     /// For the log's line at the end of each task: when it began, the tool calls, finish_task's verdict.
     private var taskStart = Date()
+    private var activityID: UUID?
     private var toolCalls = 0
     private var taskResult: TaskResult?
     private var client: ModelClient?
@@ -90,11 +128,24 @@ final class ChatModel {
     /// A task stops after this many model turns: a loop that goes nowhere still ends.
     static let maxTurns = 60
 
-    init(app: AppModel, kind: SavedSession.Kind = .poki, requester: String? = nil, sessionID: String? = nil) {
+    init(app: AppModel, kind: SavedSession.Kind = .poki, requester: String? = nil, sessionID: String? = nil,
+         executionSettings: AgentExecutionSettings = .shared) {
         self.app = app
+        self.executionSettings = executionSettings
         if let sessionID { self.sessionID = sessionID }
         self.kind = kind
         self.requester = requester
+        #if DEBUG && targetEnvironment(simulator)
+        // Preserve the explicit LiveContainer lab launcher, not stale development defaults.
+        if ProcessInfo.processInfo.arguments.contains("-pokiContainedSafari"),
+           UserDefaults.standard.bool(forKey: "pokiContainedSafari"), PKContainedWorkspace.shared().available {
+            executionSettings.setBackgroundEnabled(false)
+            containedSafari = true
+        }
+        #endif
+        interruption = NotificationCenter.default.addObserver(forName: NSNotification.Name("PokiContainedUserInterruption"), object:nil, queue:.main) { [weak self] _ in
+            Task { @MainActor in if self?.usingContained == true { self?.stop() } }
+        }
         app.addShellObserver { [weak self] event in self?.observe(event) }
         if kind == .handoff { return }
         // A live voice conversation is part of this chat: what was said and done stays in its history.
@@ -213,6 +264,12 @@ final class ChatModel {
         }
         lastOwnerText = text
         if kind == .poki { Haptics.sent() }
+        usingCarPlay = carPlay
+        usingContained = containedSafari && !carPlay
+        if usingCarPlay && !carPlayAvailable {
+            add(.note(.problem(String(localized: "Background execution is not available here yet. Turn this off to use Poki’s original mode."))))
+            return
+        }
         let provider = ModelKeys.selectedProvider
         guard provider.wired, let key = ModelKeys.key(provider) ?? (provider == .custom && ModelKeys.hasUsableKey ? "none" : nil) else {
             add(.poki(provider.signsIn ? String(localized: "Sign in to ChatGPT first: tap my picture, then Model.")
@@ -226,12 +283,20 @@ final class ChatModel {
             let id = sessionID
             Task { if let name = await SessionNamer.name(for: text, provider: provider, model: piModel) { SessionStore.shared.setAutoName(id, name) } }
         }
+        if usingCarPlay {
+            CarPlayWorkspace.shared.begin()
+        }
+        if usingContained || usingCarPlay {
+            guard !usingContained || containedAvailable else { add(.note(.problem("Safari container unavailable."))); return }
+            ownsContainedBackground = !app.background.isOn
+            if ownsContainedBackground { app.background.start() }
+        }
         running = true
         awaitingModel = true
         stopAsked = false
         planID = nil; noteID = nil; modelPlan = nil
-        let instructions = Harness.instructions(for: text)
-        if Self.direct, provider == .anthropic || provider == .openai {
+        let instructions = usingCarPlay ? CarPlayHarness.instructions : (usingContained ? ContainedHarness.instructions : Harness.instructions(for: text))
+        if !usingContained && !usingCarPlay && Self.direct && (provider == .anthropic || provider == .openai) {
             // Another model starts a new conversation on the model's side; the chat on screen stays.
             if client?.signature != "\(provider.rawValue)/\(model)" {
                 client = provider == .openai ? OpenAIClient(key: key, model: model) : AnthropicClient(key: key, model: model)
@@ -248,14 +313,18 @@ final class ChatModel {
             return
         }
         guard let piModel = provider.piModel(model) else {
+            if usingContained || usingCarPlay { endIsolatedRun() }
             running = false
             add(.note(.problem(String(localized: "pi has no model \(model) for \(provider.name)."))))
             return
         }
         // Another model starts a new loop that carries the conversation over.
-        if loop?.provider != provider || loop?.model.id != piModel.id {
-            loop = PiLoop(provider: provider, model: piModel, tools: Harness.tools,
-                          carrying: loop?.messages ?? []) { [weak self] call in
+        if loop?.provider != provider || loop?.model.id != piModel.id || loopContained != usingContained || loopCarPlay != usingCarPlay {
+            let carry = loopContained == usingContained && loopCarPlay == usingCarPlay ? (loop?.messages ?? []) : []
+            loopContained = usingContained
+            loopCarPlay = usingCarPlay
+            loop = PiLoop(provider: provider, model: piModel, tools: usingCarPlay ? CarPlayHarness.tools : (usingContained ? ContainedHarness.tools : Harness.tools),
+                          carrying: carry) { [weak self] call in
                 guard let self else { return PokiCore.ToolAnswer(text: "Task stopped. Action not executed.", jpeg: nil, isError: true) }
                 return await self.perform(call)
             }
@@ -282,10 +351,13 @@ final class ChatModel {
 
     private func began(_ engine: String, _ provider: ModelProvider, _ model: String) {
         taskStart = Date(); toolCalls = 0; taskResult = nil
+        let id = UUID(); activityID = id
+        app.beginAgentActivity(id, background: usingCarPlay || usingContained) { [weak self] in self?.stop() }
         AppLog.shared.add("chat", "task started: \(engine), \(provider.rawValue)/\(model)")
     }
 
     private func logEnd(_ engine: String, outcome: PiLoop.Outcome?) {
+        finishActivity(outcome)
         let seconds = String(format: "%.1f", Date().timeIntervalSince(taskStart))
         let verdict = taskResult.map { $0.success ? "success" : "failure" } ?? "not called"
         let ending = outcome.map { if case .failed = $0 { "failed" } else { "\($0)" } } ?? (stopAsked ? "stopped" : "ended")
@@ -325,9 +397,10 @@ final class ChatModel {
 
     private func ended(_ outcome: PiLoop.Outcome, delivered youID: UUID) {
         finishPlan()
+        finishActivity(outcome)
         // The turn is over: the phone goes back to the app the task began in (Poki's chat, where the
         // reply is), as a client's finish does (ESP-176). Nothing moves when it is in front already.
-        app.finishTask()
+        if usingContained || usingCarPlay { endIsolatedRun() } else { app.finishTask() }
         switch outcome {
         case .done: markDelivered(youID)
         case .stopped: add(.poki(String(localized: "Stopped.")))
@@ -338,6 +411,8 @@ final class ChatModel {
 
     /// Ends the task after the step under way: nothing more is sent to the phone or the model.
     func stop() {
+        if let id = activityID { app.endAgentActivity(id, success: nil, stopped: true) }
+        if usingContained || usingCarPlay { endIsolatedRun() }
         guard running else { return }
         stopAsked = true
         loop?.stop()
@@ -391,7 +466,13 @@ final class ChatModel {
     private func perform(_ call: ToolCall) async -> PokiCore.ToolAnswer {
         awaitingModel = false
         let started = Date()
+        let id = activityID
+        let title = isolatedActivityTitle(call)
+        if let id, let title { app.isolatedActivityStarted(id, title: title, app: isolatedAppName) }
         let answer = await performCall(call)
+        if let id, let title, !stopAsked, !Task.isCancelled {
+            app.isolatedActivityFinished(id, title: title, app: isolatedAppName, answer: answer)
+        }
         calls.append(CallRecord(name: call.name, arguments: call.arguments, answer: String(answer.text.prefix(2000)), ms: Int(Date().timeIntervalSince(started) * 1000), ok: !answer.isError))
         if !stopAsked { awaitingModel = true }
         persist()
@@ -401,6 +482,30 @@ final class ChatModel {
     private func performCall(_ call: ToolCall) async -> PokiCore.ToolAnswer {
         toolCalls += 1
         let args = (call.arguments.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) }) as? [String: Any] ?? [:]
+        if usingCarPlay {
+            guard !stopAsked, !Task.isCancelled else { return PokiCore.ToolAnswer(text:"Task stopped.", jpeg:nil, isError:true) }
+            switch call.name {
+            case "carplay_apps": return CarPlayWorkspace.shared.listApps()
+            case "carplay_open": return await CarPlayWorkspace.shared.open(args["bundle"] as? String ?? "")
+            case "carplay_look": return await CarPlayWorkspace.shared.look()
+            case "carplay_press", "carplay_tap", "carplay_type":
+                var input = args
+                input["action"] = call.name == "carplay_type" ? "text" : "tap"
+                return await CarPlayWorkspace.shared.perform(input)
+            case "carplay_do": return await CarPlayWorkspace.shared.perform(args)
+            case "report_plan", "finish_task": break
+            default: return PokiCore.ToolAnswer(text:"Tool unavailable in CarPlay mode. No foreground fallback.", jpeg:nil, isError:true)
+            }
+        }
+        if usingContained {
+            guard !stopAsked, !Task.isCancelled else { return PokiCore.ToolAnswer(text:"Task stopped.", jpeg:nil, isError:true) }
+            switch call.name {
+            case "container_look": return await ContainedHarness.look()
+            case "container_do": return await ContainedHarness.perform(args)
+            case "report_plan", "finish_task": break
+            default: return PokiCore.ToolAnswer(text:"Tool unavailable in isolated Safari mode. No foreground fallback.", jpeg:nil, isError:true)
+            }
+        }
         switch call.name {
         case "report_plan":
             guard let steps = args["steps"] as? [String], (1...8).contains(steps.count), let current = args["currentStep"] as? Int, (1...steps.count).contains(current) else {
@@ -425,6 +530,7 @@ final class ChatModel {
     /// The bubble shows the model's steps up to the current one: those before it done, it under way. A step
     /// appears when the model reaches it, as the board draws them.
     private func showPlan(_ plan: [String], current: Int) {
+        if let id = activityID { app.agentActivityPlan(id, steps: plan, current: current) }
         modelPlan = plan
         updatePlan { steps in
             if steps.count > current { steps.removeLast(steps.count - current) }
@@ -433,6 +539,30 @@ final class ChatModel {
                 if steps.indices.contains(i) { steps[i].text = plan[i]; steps[i].state = state } else { steps.append(PlanStep(plan[i], state: state)) }
             }
         }
+    }
+
+    private var isolatedAppName: String? { usingCarPlay ? CarPlayWorkspace.shared.selectedAppName : (usingContained ? "Safari" : nil) }
+
+    /// Operation names only: typed values and raw tool arguments never reach the Lock Screen.
+    private func isolatedActivityTitle(_ call: ToolCall) -> String? {
+        guard usingCarPlay && call.name.hasPrefix("carplay_") || usingContained && call.name.hasPrefix("container_") else { return nil }
+        switch call.name {
+        case "carplay_apps": return String(activity: "Finding apps")
+        case "carplay_open": return String(activity: "Opening app")
+        case "carplay_look", "container_look": return String(activity: "Reading screen")
+        case "carplay_press", "carplay_tap": return String(activity: "Tapping a button")
+        case "carplay_type": return String(activity: "Entering text")
+        default:
+            let args = (call.arguments.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) }) as? [String: Any]
+            return args?["action"] as? String == "wait" ? String(activity: "Waiting for screen") : String(activity: "Scrolling")
+        }
+    }
+
+    private func finishActivity(_ outcome: PiLoop.Outcome?) {
+        guard let id = activityID else { return }
+        let failed: Bool
+        switch outcome { case .failed?, .overTurns?: failed = true; default: failed = false }
+        app.endAgentActivity(id, success: failed ? false : taskResult?.success, stopped: stopAsked || outcome == .stopped)
     }
 
     // MARK: Steps and approvals from PokiCore

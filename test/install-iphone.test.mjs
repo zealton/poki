@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createInterface } from 'node:readline';
-import { mkdtemp, mkdir, readFile, rm, writeFile, chmod } from 'node:fs/promises';
+import { mkdtemp, mkdir, open, readFile, rm, writeFile, chmod } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { root } from '../src/config.mjs';
@@ -53,6 +53,42 @@ const personAnswers = state => ({
   apple_code: () => typeCode(state, '123456\n'),
   open_poki: () => sub(state, 'done', 'open_poki'),
   open_poki_tell: () => sub(state, 'done', 'open_poki'),
+});
+
+test('a custom IPA reaches the standard signing flow and a changed build is not skipped', async t => {
+  const state = await stateDir(t);
+  const ipa = join(state, 'Poki-custom.ipa');
+  await writeFile(ipa, 'synthetic first build');
+  const options = { args: ['--ipa', ipa], env: { POKI_FAKE_EXPECT_IPA: ipa }, answer: { apple_code: () => typeCode(state, '123456\n') } };
+  const first = await runInstaller(state, options);
+  assert.equal(first.code, 0, first.stderr);
+  assert.ok(first.events.some(e => e.event === 'done' && e.step === 'install'));
+  const before = JSON.parse(await readFile(join(state, 'run.json'), 'utf8')).local_ipa_sha256;
+  assert.match(before, /^[a-f0-9]{64}$/);
+  await writeFile(ipa, 'synthetic second build');
+  const second = await runInstaller(state, options);
+  assert.equal(second.code, 0, second.stderr + JSON.stringify(second.events.at(-1)));
+  assert.ok(second.events.some(e => e.event === 'done' && e.step === 'install'));
+  assert.notEqual(JSON.parse(await readFile(join(state, 'run.json'), 'utf8')).local_ipa_sha256, before);
+});
+
+test('a missing custom IPA is rejected before signing or downloading another app', async t => {
+  const state = await stateDir(t);
+  const result = await runInstaller(state, { args: ['--ipa', join(state, 'missing.ipa')] });
+  assert.equal(result.code, 1);
+  assert.equal(result.events.length, 0);
+  assert.match(result.stderr, /existing .ipa file/);
+});
+
+test('polling does not consume a response before its writer has finished', async t => {
+  const state = await stateDir(t);
+  const result = await runInstaller(state, { answer: { apple_code: async () => {
+    const file = await open(join(state, 'inbox/apple-code'), 'w', 0o600);
+    await new Promise(resolve => setTimeout(resolve, 150));
+    await file.writeFile('123456');
+    await file.close();
+  } } });
+  assert.equal(result.code, 0, result.stderr + JSON.stringify(result.events.at(-1)));
 });
 
 test('runs every step in order, stops at each person step with one sentence, and continues once it is done', async t => {

@@ -1,0 +1,32 @@
+原版 Poki + OpenRouter：主 App 验证结果
+
+本轮实现位于原版 native/ios-app，保留 PiLoop → PokiCore → 整机控制工具。
+默认模型为 OpenRouter 的 deepseek/deepseek-v4.1-flash-1017。
+聊天、视觉、会话标题与可选审批分类使用所选账户；没有把 key 嵌入源码或安装包。
+未签名 Debug Simulator 缺少 Keychain entitlement，界面明确提示密钥仅在本进程内存有效。
+
+截图所示崩溃
+- 复现于同步销毁 AppModel/LoopbackTunnel 的回归测试。
+- 栈：malloc → TaskLocal::StopLookupScope → isolated deinit → LoopbackTunnel。
+- 修复：普通非隔离析构取消任务、移除通知；内部清理句柄不参与 Observation。
+- 每轮连续创建/销毁 200 个 Tunnel，3 轮均通过；对应 OpenRouter、聊天、生命周期 6 项定向测试通过。
+- 完整回归尚未全绿：出现过剪贴板状态与语音连接/后台时序断言不稳定；无签名 Keychain 交接测试被跳过。
+
+真实 Safari 单任务：通过
+- 真正调用 OpenRouter/DeepSeek；Agent 在 iOS App 进程中自行运行。
+- Agent 打开系统 Safari、自行关闭通知/浏览器提示、输入 Pikachu pictures、点击“图片”，确认图片网格。
+- 约 123.24 秒，13 次工具调用。没有 Mac 逐步操作代理，也没有人工执行搜索步骤。
+- 任务完成后，仅为核验重新激活原有 Safari 页面，原始截图显示皮卡丘图片网格。
+
+Safari 与前台记事并发：不通过
+- 从原版 Poki 的真实聊天框输入任务，再在独立 TypingPad 连续模拟用户输入。
+- 驱动累计送出 704 字符后检测到打断；最终编辑器仅余 168 字符，且混入 Agent 的 Pikachu 输入。
+- 编辑器生命周期记录两次进入后台。全局键盘输入会落入用户当时正在使用的编辑器。
+- 失败后已终止这轮 Poki 进程，没有继续执行任务。
+- 本模拟器无 Apple 备忘录；这是 XCTest 模拟键盘输入，未声称普通键盘或真机并发已验证。
+- XCTest 可能自行激活输入目标；编辑器的独立生命周期/文字记录仍明确证明前台丢失与内容改动。
+
+结论
+本次崩溃修复与原版 OpenRouter 接入已验证；后台隔离操作尚未实现。
+不能把“原版 Poki 能打开 Safari”当成“同时操作 Safari 不影响用户输入”。
+不要把此前容器计数器成功当作系统 Safari 并发验收成功。

@@ -27,7 +27,11 @@ type Indigo = IndigoHidClient<Box<dyn idevice::ReadWrite>>;
 pub struct ClientConfig {
     #[serde(default = "default_address")]
     device_address: IpAddr,
-    pairing_file: PathBuf,
+    #[serde(default)]
+    pairing_file: Option<PathBuf>,
+    #[cfg(target_os = "macos")]
+    #[serde(default)]
+    usb_udid: Option<String>,
     #[serde(default)]
     host_name: Option<String>,
 }
@@ -47,17 +51,25 @@ fn drag_duration() -> u64 {
 pub(crate) enum Request {
     Reset,
     WarmInput,
-    /// Explicit diagnostics-only composition session. Keep the keyboard attached
-    /// between composing pinyin and navigating the OS candidate list.
+    /// Explicit native agent composition session. Keep the keyboard attached
+    /// between composing Pinyin and selecting verified OS candidates.
     Ime {
         #[serde(default)]
         text: String,
         #[serde(default)]
         key: Option<String>,
         #[serde(default)]
+        tap: Option<[u16; 2]>,
+        #[serde(default)]
+        modifiers: Vec<String>,
+        #[serde(default)]
+        frequency: Option<u64>,
+        #[serde(default)]
         end: bool,
     },
     AxTree {
+        #[serde(default)]
+        direct: bool,
         #[serde(default)]
         include_offscreen: bool,
     },
@@ -166,12 +178,12 @@ pub(crate) async fn serve(
     while let Some(call) = calls.recv().await {
         if matches!(&call.request, Request::Reset) {
             let cleanup = detach_session_keyboard(&mut session).await;
-            session = None;
+            if cleanup.is_ok() { session = None; }
             (call.answer)(cleanup.map(|_| json!({"reset": true})));
             continue;
         }
         let timeout = call.request.timeout();
-        let result = tokio::time::timeout(timeout, async {
+        let mut result = tokio::time::timeout(timeout, async {
             if session.is_none() {
                 session = Some(Session::connect(&config).await?);
             }
@@ -186,8 +198,9 @@ pub(crate) async fn serve(
             .into())
         });
         if result.is_err() {
-            let _ = detach_session_keyboard(&mut session).await;
-            session = None;
+            let cleanup = detach_session_keyboard(&mut session).await;
+            if cleanup.is_ok() { session = None; }
+            result = with_cleanup(result, cleanup);
         }
         (call.answer)(result);
     }
@@ -202,6 +215,9 @@ async fn detach_session_keyboard(session: &mut Option<Session>) -> Result<()> {
         .and_then(|m| m.keyboard.as_mut()) {
         tokio::time::timeout(Duration::from_secs(3), keyboard.close())
             .await.map_err(|_| "keyboard detach timed out")??;
+    }
+    if let Some(reader) = session.as_mut().and_then(|s|s.direct_ax.as_mut()) {
+        tokio::time::timeout(Duration::from_secs(3),reader.close()).await.map_err(|_|"AX cleanup timed out")??;
     }
     Ok(())
 }
@@ -231,11 +247,20 @@ impl Request {
 struct Session {
     device: Device,
     media: Option<InputMedia>,
+    direct_ax: Option<ax::Direct>,
 }
 
 impl Session {
     async fn connect(config: &ClientConfig) -> Result<Self> {
-        let mut pairing = Pairing::read(&config.pairing_file, config.host_name.as_deref())
+        #[cfg(target_os = "macos")]
+        if let Some(udid) = &config.usb_udid {
+            if udid.is_empty() || config.pairing_file.is_some() {
+                return Err("USB requires a nonempty udid and no pairing_file".into());
+            }
+            return Ok(Self { device: Device::open_usb(udid).await.map_err(|e| e.detail)?, media: None, direct_ax: None });
+        }
+        let path = config.pairing_file.as_ref().ok_or("pairing_file is required")?;
+        let mut pairing = Pairing::read(path, config.host_name.as_deref())
             .map_err(|error| error.detail)?;
         let device = Device::open(config.device_address, &mut pairing, Duration::from_secs(20))
             .await
@@ -243,19 +268,41 @@ impl Session {
         Ok(Self {
             device,
             media: None,
+            direct_ax: None,
         })
     }
 
     async fn execute(&mut self, request: Request) -> Result<Value> {
         request.validate()?;
         match request {
-            Request::AxTree { include_offscreen } => {
-                ax::read_tree(
+            Request::AxTree { include_offscreen, direct } => {
+                if direct {
+                    if self.direct_ax.is_none() { self.direct_ax = Some(ax::Direct::connect(&mut self.device.adapter,&self.device.rsd).await?); }
+                    let result = self.direct_ax.as_mut().unwrap().snapshot().await;
+                    // Between typing actions, the user or agent may have changed apps.
+                    // Only refresh the observation target when no keyboard/composition
+                    // is active. Never recover by replaying an in-flight edit.
+                    let idle = self.media.as_ref().is_none_or(|media| media.keyboard.is_none());
+                    if result.is_err() && idle {
+                        if let Some(mut old) = self.direct_ax.take() {
+                            let _ = tokio::time::timeout(Duration::from_secs(1),old.close()).await;
+                        }
+                        self.direct_ax = Some(ax::Direct::connect(&mut self.device.adapter,&self.device.rsd).await?);
+                        return self.direct_ax.as_mut().unwrap().snapshot().await;
+                    }
+                    return result;
+                }
+                // A fresh accessibility subscription can transiently fail to connect.
+                // Retry the observation once within the request's existing deadline,
+                // retaining the keyboard and composition. Never retry an input here.
+                let first = ax::read_tree(
                     &mut self.device.adapter,
                     &self.device.rsd,
                     include_offscreen,
-                )
-                .await
+                ).await;
+                if first.is_ok() { return first; }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                ax::read_tree(&mut self.device.adapter, &self.device.rsd, include_offscreen).await
             }
             Request::Screenshot => {
                 let mut dvt = idevice::dvt::remote_server::RemoteServerClient::connect_rsd(
@@ -316,10 +363,11 @@ impl Session {
 
 fn validate(request: &Request) -> Result<()> {
     match request {
-        Request::Ime { text, key, .. } => {
+        Request::Ime { text, key, modifiers, .. } => {
+            for modifier in modifiers { modifier_usage(modifier)?; }
             if text.len() > 200 { return Err("IME input is at most 200 bytes".into()); }
             for character in text.chars() { char_usage(character)?; }
-            if let Some(key) = key { if key != "next_input_source" { key_usage(key)?; } }
+            if let Some(key) = key { if !matches!(key.as_str(), "next_input_source") { key_usage(key)?; } }
             Ok(())
         }
         Request::Tap { duration_ms, .. }
@@ -346,6 +394,11 @@ fn validate(request: &Request) -> Result<()> {
         Request::Key { count, .. } if !(1..=200).contains(count) => {
             Err("key count must be 1..200".into())
         }
+        Request::Key { key, modifiers, .. } => {
+            key_usage(key)?;
+            for modifier in modifiers { modifier_usage(modifier)?; }
+            Ok(())
+        }
         Request::LaunchApp { bundle_id, .. } if bundle_id.is_empty() => {
             Err("bundle_id must not be empty".into())
         }
@@ -368,7 +421,33 @@ struct InputMedia {
     touch: Touch,
 }
 
+/// Preserve both the action outcome and removal failure. A successful send is not
+/// a successful action when its simulated keyboard could not be detached.
+fn with_cleanup<T>(outcome: Result<T>, cleanup: Result<()>) -> Result<T> {
+    match (outcome, cleanup) {
+        (outcome, Ok(())) => outcome,
+        (Ok(_), Err(cleanup)) => Err(format!("keyboard cleanup failed: {cleanup}").into()),
+        (Err(error), Err(cleanup)) => Err(format!("{error}; keyboard cleanup failed: {cleanup}").into()),
+    }
+}
+
 impl InputMedia {
+    async fn attach_keyboard(&mut self, device: &mut Device) -> Result<()> {
+        if self.keyboard.is_none() {
+            self.keyboard = Some(Keyboard::connect(device).await?);
+            // Store the handle before this cancellable wait so worker timeout
+            // recovery can still explicitly remove the simulated keyboard.
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+        Ok(())
+    }
+
+    async fn close_keyboard(&mut self) -> Result<()> {
+        if let Some(keyboard) = self.keyboard.as_mut() { keyboard.close().await?; }
+        self.keyboard = None;
+        Ok(())
+    }
+
     async fn connect(device: &mut Device) -> Result<Self> {
         let opened = stream::start_screen_media_stream(&mut device.adapter, &mut device.rsd, 1)
             .await
@@ -409,26 +488,29 @@ async fn input(
     if matches!(request, Request::WarmInput) {
         return Ok(json!({"ready": true}));
     }
-    if let Request::Ime { text, key, .. } = request {
+    if let Request::Ime { text, key, tap, modifiers, frequency, .. } = request {
         let media = media.as_mut().unwrap();
-        if media.keyboard.is_none() { media.keyboard = Some(Keyboard::connect(device).await?); }
+        media.attach_keyboard(device).await?;
         let keyboard = media.keyboard.as_mut().unwrap();
-        if !text.is_empty() { type_keys(keyboard, &text, false, Some(60)).await?; }
+        if !text.is_empty() { type_keys(keyboard, &text, false, frequency.or(Some(60))).await?; }
         if let Some(key) = key {
             if key == "next_input_source" {
                 // Standard hardware-keyboard input-source shortcut. This cycles
                 // installed sources; it does not prove Chinese is selected.
                 chord(keyboard, 0x2c, &[0xe0]).await?;
-            } else { chord(keyboard, key_usage(&key)?, &[]).await?; }
+            } else {
+                let modifiers = modifiers.iter().map(|m| modifier_usage(m)).collect::<Result<Vec<_>>>()?;
+                chord(keyboard, key_usage(&key)?, &modifiers).await?;
+            }
         }
+        if let Some([x, y]) = tap { held_tap(&mut media.touch, x, y, 50).await?; }
         return Ok(json!({"sent": true, "text_verified": false}));
     }
     // Never leak a diagnostic composition into ordinary agent input.
-    if let Some(mut keyboard) = media.as_mut().unwrap().keyboard.take() {
-        let cancelled = chord(&mut keyboard, 0x29, &[]).await;
-        let closed = keyboard.close().await;
-        cancelled?;
-        closed?;
+    if let Some(keyboard) = media.as_mut().unwrap().keyboard.as_mut() {
+        let cancelled = chord(keyboard, 0x29, &[]).await;
+        let closed = media.as_mut().unwrap().close_keyboard().await;
+        with_cleanup(cancelled, closed)?;
     }
     let request = match request {
         Request::TypeText {
@@ -436,21 +518,20 @@ async fn input(
             clear,
             submit,
         } => {
-            let mut keyboard = Keyboard::connect(device).await?;
+            let media = media.as_mut().unwrap();
+            media.attach_keyboard(device).await?;
             let outcome = crate::pasteboard::paste_text(
                 &mut device.adapter,
                 &device.rsd,
-                &mut keyboard,
+                media.keyboard.as_mut().unwrap(),
                 &text,
                 clear,
                 submit,
                 None,
             )
             .await;
-            let cleanup = keyboard.close().await;
-            let value = outcome?;
-            cleanup?;
-            return Ok(value);
+            let cleanup = media.close_keyboard().await;
+            return with_cleanup(outcome, cleanup);
         }
         request => request,
     };
@@ -517,33 +598,32 @@ async fn input_open(device: &mut Device, media: &mut InputMedia, request: Reques
             clear,
             frequency,
         } => {
-            let mut keyboard = Keyboard::connect(device).await?;
-            let outcome = type_keys(&mut keyboard, &text, clear, frequency).await;
-            let cleanup = keyboard.close().await;
-            outcome?;
-            cleanup?;
+            media.attach_keyboard(device).await?;
+            let outcome = type_keys(media.keyboard.as_mut().unwrap(), &text, clear, frequency).await;
+            let cleanup = media.close_keyboard().await;
+            with_cleanup(outcome, cleanup)?;
         }
         Request::Key {
             key,
             modifiers,
             count,
         } => {
-            let mut keyboard = Keyboard::connect(device).await?;
             let modifiers = modifiers
                 .iter()
                 .map(|name| modifier_usage(name))
                 .collect::<Result<Vec<_>>>()?;
             let usage = key_usage(&key)?;
+            media.attach_keyboard(device).await?;
+            let keyboard = media.keyboard.as_mut().unwrap();
             let outcome: Result<()> = async {
                 for _ in 0..count {
-                    chord(&mut keyboard, usage, &modifiers).await?;
+                    chord(keyboard, usage, &modifiers).await?;
                 }
                 Ok(())
             }
             .await;
-            let cleanup = keyboard.close().await;
-            outcome?;
-            cleanup?;
+            let cleanup = media.close_keyboard().await;
+            with_cleanup(outcome, cleanup)?;
         }
         Request::Button { button } => {
             let mut hid = Indigo::connect_rsd(&mut device.adapter, &mut device.rsd)
@@ -569,7 +649,6 @@ impl Keyboard {
             .await
             .map_err(not_sent_error)?;
         let service = hid.create_main_keyboard().await.map_err(not_sent_error)?;
-        tokio::time::sleep(Duration::from_millis(150)).await;
         Ok(Self { hid, service })
     }
     async fn close(&mut self) -> Result<()> {
@@ -682,26 +761,28 @@ async fn type_keys(
         chord(keyboard, 0x2a, &[]).await?;
     }
     let shift = KeyboardUsage::new(0xe1)?;
-    // One down and one up report per character. Half the requested character interval preserves
-    // PokiCore's humanized WDA speed; without one, match the desktop bridge's 12 ms report gap.
-    let gap = frequency
-        .map(|value| Duration::from_micros(500_000 / value.clamp(1, 240)))
-        .unwrap_or(Duration::from_millis(12));
     for character in text.chars() {
         let (usage, shifted) = char_usage(character)?;
         let key = KeyboardUsage::new(usage as u16)?;
-        // Send modifiers and the key atomically: two reports per character,
-        // including uppercase and punctuation, rather than four round trips.
+        // iPadOS 27 delivered lowercase/unshifted punctuation when Shift and the
+        // character changed in the same report. Give each modifier transition
+        // its own report, and release the character before releasing Shift.
+        let reports = if shifted { 4 } else { 2 };
+        let gap = frequency
+            .map(|value| Duration::from_micros(1_000_000 / value.clamp(1, 1000) / reports))
+            .unwrap_or(Duration::from_millis(12));
+        if shifted {
+            keyboard.hid.set_main_keyboard_usages(&mut keyboard.service, [shift]).await?;
+            tokio::time::sleep(gap).await;
+        }
         let usages = if shifted { vec![shift, key] } else { vec![key] };
-        keyboard
-            .hid
-            .set_main_keyboard_usages(&mut keyboard.service, usages)
-            .await?;
+        keyboard.hid.set_main_keyboard_usages(&mut keyboard.service, usages).await?;
         tokio::time::sleep(gap).await;
-        keyboard
-            .hid
-            .set_main_keyboard_usages(&mut keyboard.service, [])
-            .await?;
+        if shifted {
+            keyboard.hid.set_main_keyboard_usages(&mut keyboard.service, [shift]).await?;
+            tokio::time::sleep(gap).await;
+        }
+        keyboard.hid.set_main_keyboard_usages(&mut keyboard.service, []).await?;
         tokio::time::sleep(gap).await;
     }
     keyboard
@@ -754,6 +835,29 @@ fn button_usage(name: &str) -> Result<(u64, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cleanup_failure_is_not_hidden_by_an_input_failure() {
+        let both = with_cleanup::<()>(Err("input uncertain".into()), Err("remove refused".into()));
+        let message = both.unwrap_err().to_string();
+        assert!(message.contains("input uncertain"));
+        assert!(message.contains("keyboard cleanup failed: remove refused"));
+        assert!(with_cleanup(Ok(123), Err("remove refused".into())).is_err());
+        assert_eq!(with_cleanup(Ok(123), Ok(())).unwrap(), 123);
+        assert_eq!(with_cleanup::<()>(Err("input failed".into()), Ok(())).unwrap_err().to_string(), "input failed");
+    }
+
+    #[test]
+    fn key_names_and_modifiers_are_validated_before_attachment() {
+        for request in [
+            r#"{"op":"key","key":"unknown"}"#,
+            r#"{"op":"key","key":"space","modifiers":["unknown"]}"#,
+            r#"{"op":"key","key":"space","count":0}"#,
+        ] {
+            assert!(parse_request(request).unwrap().validate().is_err());
+        }
+        assert!(parse_request(r#"{"op":"key","key":"space","modifiers":["control"]}"#).unwrap().validate().is_ok());
+    }
 
     #[test]
     fn requests_keep_wda_typing_speed_and_backspace() {

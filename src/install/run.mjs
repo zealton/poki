@@ -2,10 +2,11 @@
 // runs end to end. Agent steps run by themselves; at a person step the installer says one sentence
 // and polls until it sees the step done. Every failure carries a code from steps.json.
 import { execFile, spawn } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { Bridge, BridgeError } from './bridge.mjs';
@@ -25,7 +26,16 @@ const shellQuote = text => (/^[\w@%+=:,./-]+$/.test(text) ? text : `'${text.repl
 // the installer's absolute path, and --state when this run does not use the default folder.
 export function codeCommand(state) {
   const stateArg = resolve(state) === defaultStateDir() ? '' : ` --state ${shellQuote(resolve(state))}`;
-  return `node ${shellQuote(cliPath)} code${stateArg}`;
+  return `${shellQuote(process.execPath)} ${shellQuote(cliPath)} code${stateArg}`;
+}
+
+// Publish a complete person response at once; polling must never consume an empty/truncated code.
+export async function writeInbox(directory, name, value) {
+  const pending = join(directory, `${name}.${randomUUID()}.pending`);
+  try {
+    await writeFile(pending, value, { mode: 0o600 });
+    await rename(pending, join(directory, name));
+  } finally { await rm(pending, { force: true }); }
 }
 const KEYCHAIN_SERVICE = 'poki-setup-install';
 const pollMs = () => Number(process.env.POKI_INSTALL_POLL_MS ?? 2000);
@@ -182,7 +192,7 @@ class Run {
     if (!files[wait]) return;
     setTimeout(() => {
       this.emit({ event: 'note', text: `[dry run] the simulated person finished ${wait}` });
-      writeFile(join(this.inbox, files[wait][0]), files[wait][1]).catch(() => {});
+      writeInbox(this.inbox, files[wait][0], files[wait][1]).catch(() => {});
     }, Number(process.env.POKI_FAKE_DELAY_MS ?? 1500));
   }
 
@@ -190,6 +200,7 @@ class Run {
     const file = join(this.inbox, name);
     if (!existsSync(file)) return null;
     const value = (await readFile(file, 'utf8')).trim();
+    if (!value) return null;
     await rm(file, { force: true });
     return value || null;
   }
@@ -381,7 +392,10 @@ class Run {
   }
 
   async install() {
-    if (this.doneBefore('install') && !this.opts.reinstall) {
+    const sameSource = this.opts.ipa
+      ? this.previous?.local_ipa_sha256 === this.record.local_ipa_sha256
+      : !this.previous?.local_ipa_sha256;
+    if (this.doneBefore('install') && !this.opts.reinstall && sameSource) {
       const records = await this.bridge.request('records');
       const installed = records.find(r => r.udid === this.udid);
       if (installed && installed.profile_expires_at > Date.now() / 1000) {
@@ -390,7 +404,7 @@ class Run {
       }
     }
     const retries = {};
-    let localIpa;
+    let localIpa = this.opts.ipa;
     for (;;) {
       try {
         const onProgress = data => {
@@ -554,6 +568,11 @@ class Run {
   async go() {
     await mkdir(this.inbox, { recursive: true });
     await this.load();
+    if (this.opts.ipa) {
+      this.record.local_ipa_sha256 = createHash('sha256').update(await readFile(this.opts.ipa)).digest('hex');
+      this.record.local_ipa_name = basename(this.opts.ipa);
+      this.emit({ event: 'note', text: `Using local build ${this.record.local_ipa_name} (SHA-256 ${this.record.local_ipa_sha256}); no released IPA fallback.` });
+    }
     const installer = await installerVersion();
     this.record.installer = installer;
     this.emit({ event: 'installer', ...installer });

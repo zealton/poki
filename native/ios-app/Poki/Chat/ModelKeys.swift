@@ -107,6 +107,7 @@ enum ModelProvider: String, CaseIterable, Identifiable, Sendable {
         ]
         // One OpenRouter key, the main labs' models (PiSwift's openrouter catalog).
         case .openrouter: [
+            ChatModelChoice(id: OpenRouterDefaults.modelID, name: "DeepSeek V4.1 Flash (OpenRouter)"),
             ChatModelChoice(id: "anthropic/claude-sonnet-5.5", name: "Claude Sonnet 5.5 (OpenRouter)"),
             ChatModelChoice(id: "anthropic/claude-opus-5.5", name: "Claude Opus 5.5 (OpenRouter)"),
             ChatModelChoice(id: "openai/gpt-6.1-sol", name: "GPT-6.1 Sol (OpenRouter)"),
@@ -135,6 +136,15 @@ enum ModelProvider: String, CaseIterable, Identifiable, Sendable {
     /// pi's model for one of `models`.
     func piModel(_ id: String) -> Model? {
         guard let piProvider else { return nil }
+        if self == .openrouter, id == OpenRouterDefaults.modelID {
+            // Explicit metadata: do not inherit another lab's API or vision capabilities when
+            // PiSwift's pinned catalog predates this model. Uses the same PokiCore tools as before.
+            return Model(id: id, name: "DeepSeek V4.1 Flash (OpenRouter)", api: .openAICompletions,
+                         provider: piProvider, baseUrl: OpenRouterDefaults.baseURL, reasoning: true,
+                         input: [.text, .image],
+                         cost: ModelCost(input: 0.006, output: 0.5, cacheRead: 0.005, cacheWrite: 0),
+                         contextWindow: 1_048_576, maxTokens: 8_192)
+        }
         if self == .custom {
             let base = ModelKeys.customURL.trimmingCharacters(in: .whitespaces)
             guard !base.isEmpty, !id.isEmpty else { return nil }
@@ -161,13 +171,37 @@ struct ChatModelChoice: Hashable, Identifiable, Sendable {
     var name: String
 }
 
+/// This fork's default account. Credentials still come only from the owner's Keychain.
+enum OpenRouterDefaults {
+    static let baseURL = "https://openrouter.ai/api/v1"
+    static let modelID = "deepseek/deepseek-v4.1-flash-1017"
+}
+
 /// The owner's keys and the ChatGPT sign-in, in this iPhone's keychain (the relay key's service, one
 /// account per provider). A key is only ever sent to its own provider. Nothing here prints or logs a key
 /// or a token.
 enum ModelKeys {
     private static func account(_ provider: ModelProvider) -> String { "model-key.\(provider.rawValue)" }
 
+    #if DEBUG && targetEnvironment(simulator)
+    private static let volatileLock = NSLock()
+    nonisolated(unsafe) private static var volatileKeys: [ModelProvider: String] = [:]
+    #endif
+
+    /// Unsigned Simulator builds may lack Keychain entitlement. Their explicit fallback lives only
+    /// in this process and is labelled in Accounts; device/release builds always require Keychain.
+    static func isMemoryOnly(_ provider: ModelProvider) -> Bool {
+        #if DEBUG && targetEnvironment(simulator)
+        return volatileLock.withLock { volatileKeys[provider] != nil }
+        #else
+        return false
+        #endif
+    }
+
     static func key(_ provider: ModelProvider) -> String? {
+        #if DEBUG && targetEnvironment(simulator)
+        if let key = volatileLock.withLock({ volatileKeys[provider] }) { return key }
+        #endif
         guard let data = try? Keychain.read(account(provider)), let key = String(data: data, encoding: .utf8), !key.isEmpty else { return nil }
         return key
     }
@@ -176,11 +210,23 @@ enum ModelKeys {
 
     static func save(_ key: String, for provider: ModelProvider) throws {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        #if DEBUG && targetEnvironment(simulator)
+        do {
+            try Keychain.write(Data(trimmed.utf8), account: account(provider))
+            volatileLock.withLock { volatileKeys.removeValue(forKey: provider) }
+        } catch let error as NSError where error.domain == NSOSStatusErrorDomain && error.code == -34018 {
+            volatileLock.withLock { volatileKeys[provider] = trimmed }
+        }
+        #else
         try Keychain.write(Data(trimmed.utf8), account: account(provider))
+        #endif
         saved += 1
     }
 
     static func remove(_ provider: ModelProvider) {
+        #if DEBUG && targetEnvironment(simulator)
+        volatileLock.withLock { volatileKeys.removeValue(forKey: provider) }
+        #endif
         Keychain.delete(account(provider))
         saved += 1
     }
@@ -206,7 +252,7 @@ enum ModelKeys {
     }
 
     static var selectedProvider: ModelProvider {
-        get { UserDefaults.standard.string(forKey: "chat.provider").flatMap(ModelProvider.init(rawValue:)) ?? .anthropic }
+        get { UserDefaults.standard.string(forKey: "chat.provider").flatMap(ModelProvider.init(rawValue:)) ?? .openrouter }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "chat.provider"); saved += 1 }
     }
 

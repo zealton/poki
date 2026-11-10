@@ -1,0 +1,26 @@
+{
+  "checks": {
+    "model_completed": true,
+    "actual_callbacks": true,
+    "separate_processes": true,
+    "exact_typing": true,
+    "actual_actions_during_typing": true,
+    "no_focus_loss_during_typing": true,
+    "focus_requests_rejected": true,
+    "guest_pixel_capture": true
+  },
+  "allPassed": true,
+  "count": 10,
+  "characters": 690,
+  "actionsDuringTyping": 3,
+  "focusAttempts": 10,
+  "requests": 12,
+  "model": "deepseek/deepseek-v4.1-flash-1017",
+  "typingStart": 1794287721.571145,
+  "typingEnd": 1794287740.936506,
+  "pids": {
+    "guest": 23927,
+    "worker": 23929,
+    "typingPad": 23953
+  }
+}

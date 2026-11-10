@@ -13,6 +13,8 @@
   <a href="https://poki.bot">poki.bot</a>
 </p>
 
+> **Experimental fork feature:** [Poki Workspace](native/ios-workspace/README.md) runs an on-device OpenRouter agent against a separate LiveContainer guest, with a real scene preview and no global touch/keyboard injection. Simulator tests are available; physical-device and PiP acceptance are separate.
+
 <!-- badges:start -->
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0--only-blue" alt="License: AGPL-3.0-only"></a>
@@ -23,6 +25,14 @@
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20iOS-lightgrey" alt="Platform: macOS and iOS">
 </p>
 <!-- badges:end -->
+
+## Experimental Poki typing panel
+
+The pre-alpha implementation bundles an automation-only **Poki is typing** keyboard,
+preferred over native keyboard simulation when available. It includes local humanized
+Chinese Pinyin/English typing, user-takeover pauses, and early observation-based learning.
+It is **not yet device-validated**. See [setup, language/IME support, the pending test
+matrix, and the hidden user-routine experiment](docs/poki-keyboard.md).
 
 ## Quick start
 

@@ -1,0 +1,37 @@
+2026-11-10 acceptance results
+Xcode 26.2 / arm64 iOS 26.2 Simulator 23C52 / iPhone 17 Pro simulator.
+LiveContainer 9d6ea09b05afa2c8fc537c372795a294db631311.
+
+Real model: OpenRouter deepseek/deepseek-v4.1-flash-1017.
+No model mocks, no Mac command-file action queue.
+API key delivered only in memory and not included in source or evidence.
+Simulator Keychain returns an entitlement error; the UI uses the documented
+memory-only fallback. Real-device Keychain persistence remains untested.
+
+XCTest user input case (Evidence/concurrent-summary.json):
+- 690/690 characters match the expected test input.
+- Actual guest button counter reaches 10, Name becomes Poki.
+- 3 business callbacks occur within the continuous typing interval.
+- 10 focus requests from the ordinary button business callback are rejected.
+- No text focus loss or foreground loss during the typing interval.
+- Autonomous worker completes after 12 real model requests.
+
+Normal keyboard case, XCTest runners terminated (Evidence/native-summary.json):
+- 690/690 characters match normal iOS sentence capitalization.
+- Actual guest counter reaches 3, Name becomes Poki.
+- All 4 mutations (three button callbacks and one text change) occur during typing.
+- 3 guest focus requests are rejected; foreground editor retains input focus.
+- Worker independently finishes after 5 real model requests, while host is in background.
+- Source images are the guest's actual CALayer output, including an AX-hidden pixel canvas.
+
+Pause / resume / stop:
+- Active task pauses with 0 actions / 1 request.
+- Resume starts a fresh observation and a second request.
+- Stop acknowledges 0 actions / 2 requests. Late network replies cannot perform actions.
+- Pause after an already completed task preserves the completed state.
+
+Builds:
+- Simulator app builds, installs and launches.
+- Device architecture compiles and packages an unsigned IPA.
+- Physical device signing, install, third-party guest compatibility, long-running
+  background scheduling and PiP have NOT been accepted. Simulator reports PiP unavailable.

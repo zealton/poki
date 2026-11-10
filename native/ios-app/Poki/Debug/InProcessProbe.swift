@@ -47,6 +47,14 @@ final class InProcessProbe: ObservableObject {
 
     let queue = DispatchQueue(label: "poki.inprocess.probe", qos: .userInitiated)
     private var record: [[String: Any]] = []
+    #if DEBUG && targetEnvironment(simulator)
+    private var interactiveGrant: UIBackgroundTaskIdentifier = .invalid
+    private func endInteractiveGrant() {
+        guard interactiveGrant != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(interactiveGrant)
+        interactiveGrant = .invalid
+    }
+    #endif
 
     func startFromLaunchArguments(model: AppModel) {
         let defaults = UserDefaults.standard
@@ -68,11 +76,118 @@ final class InProcessProbe: ObservableObject {
             case "tools": await toolsCycle(model: model, app: defaults.string(forKey: "pokiProbeApp") ?? "local.pokimcp.fixture")
             case "gym": await gymScorecard(model: model)
             case "chat": await chatCycle(model: model)
+            case "chat-openrouter": await chatCycle(model: model, liveOpenRouter: true)
+            #if DEBUG && targetEnvironment(simulator)
+            case "activity": await activitySurfaceFixture(model: model)
+            case "carplay": await carPlayAcceptance(model: model)
+            case "contained": await containedCycle(model:model)
+            case "interactive":
+                // Simulator-only setup for testing the normal chat UI. The phone tools and model
+                // remain Poki's production implementations; there is no scripted task or reply.
+                if await prepare() {
+                    model.inProcessReadyForProbe()
+                    endInteractiveGrant()
+                    interactiveGrant = UIApplication.shared.beginBackgroundTask(withName: "Poki Simulator acceptance") { [weak self] in
+                        Task { @MainActor in self?.endInteractiveGrant() }
+                    }
+                }
+            #endif
             case "bench": await benchmark(rounds: defaults.integer(forKey: "pokiBenchRounds") > 0 ? defaults.integer(forKey: "pokiBenchRounds") : 5)
             default: await prepareOnly()
             }
         }
     }
+
+    #if DEBUG && targetEnvironment(simulator)
+    /// Explicit Simulator UI fixture. It exercises the real ActivityKit/App Group path, not a model
+    /// or a phone task. The visible labels identify the sample so screenshots cannot imply live work.
+    private func activitySurfaceFixture(model: AppModel) async {
+        let id = UUID()
+        model.beginAgentActivity(id, background: true) { [weak model] in
+            model?.endAgentActivity(id, success: nil, stopped: true)
+        }
+        model.agentActivityPlan(id, steps: ["Live Activity UI sample"], current: 1)
+        let jpeg = ActivityPreview.sampleScreen()?.jpegData(compressionQuality: 0.8)
+        for title in ["UI sample: open app", "UI sample: read screen", "UI sample: inspect image"] {
+            model.isolatedActivityStarted(id, title: title, app: "UI sample")
+            model.isolatedActivityFinished(id, title: title, app: "UI sample", answer: .init(text: "UI fixture only", jpeg: jpeg, isError: false))
+        }
+        let ownsBackground = !model.background.isOn
+        if ownsBackground { model.background.start() }
+        defer { if ownsBackground && !model.sessionOn { model.background.stop() } }
+        for _ in 0..<600 {
+            guard model.liveActivityState.agentTask?.active == true else { return }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        model.endAgentActivity(id, success: true, stopped: false)
+    }
+
+    /// Starts tasks in the original ChatModel after the independent editor is
+    /// already typing. Never opens the global XCTest automation session.
+    private func carPlayAcceptance(model: AppModel) async {
+        guard let chat = AskPoki.chat else { return }
+        model.prepareAgentActivity() // Owner starts the test in front, before the independent editor.
+        let ownsBackground = !model.background.isOn
+        if ownsBackground { model.background.start() }
+        defer { if ownsBackground && !model.sessionOn { model.background.stop() } }
+        endInteractiveGrant()
+        interactiveGrant = UIApplication.shared.beginBackgroundTask(withName: "CarPlay acceptance") { [weak self] in
+            Task { @MainActor in self?.endInteractiveGrant() }
+        }
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("carplay-acceptance")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var last = ""
+        for _ in 0..<3600 {
+            guard model.background.isOn else { return }
+            if let data = try? Data(contentsOf: dir.appendingPathComponent("request.json")),
+               let request = (try? JSONSerialization.jsonObject(with: data)) as? [String: String],
+               let id = request["id"], id != last, let task = request["task"], ModelKeys.hasKey(.openrouter) {
+                last = id
+                ModelKeys.selectedProvider = .openrouter
+                chat.newConversation(); chat.setCarPlay(true)
+                let started = Date().timeIntervalSince1970
+                var record: TaskRecord?
+                let previous = ChatModel.afterTask
+                ChatModel.afterTask = { value in record = value; previous?(value) }
+                chat.send(task)
+                while chat.running { try? await Task.sleep(for: .milliseconds(100)) }
+                ChatModel.afterTask = previous
+                let receipt: [String: Any] = ["id": id, "started": started, "ended": Date().timeIntervalSince1970,
+                                            "text": record?.result?.summary ?? "No finish_task result.", "success": record?.result?.success as Any? ?? NSNull(),
+                                            "calls": chat.calls.map { ["name": $0.name, "arguments": $0.arguments, "answer": $0.answer, "ok": $0.ok] as [String: Any] }]
+                if let bytes = try? JSONSerialization.data(withJSONObject: receipt, options: [.prettyPrinted, .sortedKeys]) {
+                    try? bytes.write(to: dir.appendingPathComponent(id + ".json"), options: .atomic)
+                }
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+    }
+
+    /// Uses only the contained scene transport, never initializes global XCTest automation.
+    private func containedCycle(model:AppModel) async {
+        let host = PKContainedWorkspace.shared()
+        let ownsBackground = !model.background.isOn
+        if ownsBackground { model.background.start() }
+        defer { host.stop(); if ownsBackground && !model.sessionOn { model.background.stop() } }
+        let directory = FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("contained-probe")
+        try? FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
+        for i in 0..<8 {
+            try? await Task.sleep(for:.seconds(4))
+            let result: ([AnyHashable:Any],Data?) = await withCheckedContinuation { c in host.observe { c.resume(returning:($0,$1)) } }
+            var value = result.0
+            value["hostActive"] = UIApplication.shared.applicationState == .active
+            value["backgroundKeeperOn"] = model.background.isOn
+            value["at"] = Date().timeIntervalSince1970
+            if let bytes = try? JSONSerialization.data(withJSONObject:value,options:[.prettyPrinted,.sortedKeys]) { try? bytes.write(to:directory.appendingPathComponent("look-\(i).json")) }
+            try? result.1?.write(to:directory.appendingPathComponent("look-\(i).jpg"))
+            if i == 0 {
+                let action:[String:Any] = ["action":"navigate","url":"https://example.com"]
+                let answer = await withCheckedContinuation { c in host.perform(action) { c.resume(returning:$0) } }
+                if let bytes=try? JSONSerialization.data(withJSONObject:answer,options:.prettyPrinted) { try? bytes.write(to:directory.appendingPathComponent("navigate.json")) }
+            }
+        }
+    }
+    #endif
 
     func prepareOnly() async {
         guard begin("prepare") else { return }
@@ -302,17 +417,45 @@ final class InProcessProbe: ObservableObject {
     /// this path. The chat is pointed at an OpenAI-compatible endpoint (on CI, a scripted model on the
     /// Mac), the owner sends a task, pi runs it with look and do on the phone, the session is saved; then an
     /// outside agent's `ask_poki` runs a second task as a hand-off. Into Documents/inprocess-probe.json.
-    func chatCycle(model: AppModel) async {
+    func chatCycle(model: AppModel, liveOpenRouter: Bool = false) async {
         guard begin("chat with Poki's agent") else { return }
         defer { end() }
-        guard await prepare() else { return }
+        if model.automationPath == .nativeServices {
+            // NativeServicesWDA opens its own paired CoreDevice connections. Starting XCTest here
+            // would test a different permission path and could fail before the chosen transport ran.
+            guard model.pairingPath != nil else {
+                note("native services need the phone's pairing first", ["step": "chat_missing_pairing"])
+                return
+            }
+            note("using paired native services; no XCTest session", ["step": "chat_transport", "path": "native-services"])
+        } else {
+            guard await prepare() else { return }
+        }
+        let ownsNativeBackground = model.automationPath == .nativeServices && !model.background.isOn
+        if ownsNativeBackground { model.background.start() }
+        defer { if ownsNativeBackground && !model.sessionOn { model.background.stop() } }
         model.inProcessReadyForProbe()
         let background = UIApplication.shared.beginBackgroundTask(withName: "Chat probe")
         defer { UIApplication.shared.endBackgroundTask(background) }
         let defaults = UserDefaults.standard
-        ModelKeys.customURL = defaults.string(forKey: "pokiProbeModelURL") ?? "http://127.0.0.1:8765/v1"
-        ModelKeys.customModel = defaults.string(forKey: "pokiProbeModel") ?? "poki-mock"
-        ModelKeys.selectedProvider = .custom
+        if liveOpenRouter {
+            // The real provider, credential, chat loop and PokiCore tools. No proxy on the Mac and
+            // no fixture-only tool catalog. A Debug Simulator FIFO may still be importing the key.
+            for _ in 0..<200 where !ModelKeys.hasKey(.openrouter) {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            guard ModelKeys.hasKey(.openrouter) else {
+                note("OpenRouter account missing", ["step": "chat_missing_key"])
+                return
+            }
+            ModelKeys.selectedProvider = .openrouter
+        } else {
+            ModelKeys.customURL = defaults.string(forKey: "pokiProbeModelURL") ?? "http://127.0.0.1:8765/v1"
+            ModelKeys.customModel = defaults.string(forKey: "pokiProbeModel") ?? "poki-mock"
+            ModelKeys.selectedProvider = .custom
+        }
+        note("chat account: \(ModelKeys.selectedProvider.name), \(ModelKeys.selectedModel)",
+             ["step": "chat_account", "provider": ModelKeys.selectedProvider.rawValue, "model": ModelKeys.selectedModel])
         AskPoki.refresh()
         guard let chat = AskPoki.chat else { note("no chat", ["step": "chat_missing"]); return }
         chat.newConversation()
@@ -330,6 +473,9 @@ final class InProcessProbe: ObservableObject {
         try? await Task.sleep(for: .seconds(1))
         let saved = SessionStore.shared.session(chat.sessionID)
         note("chat session saved: \(saved != nil)", ["step": "chat_saved", "saved": saved != nil, "entries": saved?.entries.count ?? 0, "calls": saved?.calls.count ?? 0])
+        // The paid live-provider acceptance executes exactly the requested task, not an additional
+        // unrelated fixture hand-off. Full call receipts remain in Poki's normal Sessions store.
+        if liveOpenRouter { return }
         // An outside agent hands a task over.
         let t1 = ProcessInfo.processInfo.systemUptime
         let handoff = await model.phoneToolWithPicture("ask_poki", arguments: "{\"task\":\"Open the Poki fixture app and tell me what it shows.\"}")
@@ -414,11 +560,6 @@ struct InProcessSection: View {
     @ObservedObject var probe = InProcessProbe.shared
     @AppStorage("automationPath") private var path = AutomationPath.nativeServices.rawValue
     private let running = AutomationPath.current
-    @State private var ime = NativeServicesWDA(screen: UIScreen.main.bounds.size)
-    @State private var pinyin = "nihao"
-    @State private var imeStatus = ""
-    @State private var imeBusy = false
-    @State private var imeTask: Task<Void, Never>?
 
     var body: some View {
         Section {
@@ -430,26 +571,6 @@ struct InProcessSection: View {
                 Text("Takes effect when Poki starts again.").font(.caption).foregroundStyle(.orange)
             }
             ProbeField(probe: probe).frame(height: 44)
-            DisclosureGroup("Chinese keyboard experiment") {
-                Text("Select Chinese Pinyin on the test field first. Actions wait 2 seconds so you can focus the field. Inspect the candidates before choosing; Space may insert a space if no composition is active.")
-                    .font(.caption)
-                TextField("Pinyin", text: $pinyin).textInputAutocapitalization(.never).autocorrectionDisabled()
-                Button("Compose Pinyin") { imeAction(text: pinyin) }.disabled(imeBusy)
-                Button("Switch to Chinese and verify") { imeAction(key: "next_input_source") }.disabled(imeBusy)
-                Button("Read candidate accessibility") { imeAction(read: true) }.disabled(imeBusy)
-                HStack {
-                    Button("Previous") { imeAction(key: "left") }
-                    Button("Next") { imeAction(key: "right") }
-                    Button("Choose (Space)") { imeAction(key: "space") }
-                }.disabled(imeBusy)
-                HStack {
-                    Button("More candidates") { imeAction(key: "down") }
-                    Button("Backspace") { imeAction(key: "backspace") }
-                    Button("End experiment") { imeAction(end: true) }
-                }.disabled(imeBusy)
-                Text(imeStatus).font(.caption).textSelection(.enabled)
-                Text("Composition requires Chinese as the focused test field’s active input language. This verifies Chinese, not the specific Pinyin layout. The accessibility read may include app text: review it before sharing.").font(.caption)
-            }
             HStack {
                 Button("Port 8100") { Task { await probe.portCheck() } }
                 Button("Separate session") { Task { await probe.separateTrial() } }
@@ -474,72 +595,10 @@ struct InProcessSection: View {
         } header: {
             Text("In-process automation")
         } footer: {
-            Text("Native services is an experimental banner-free path using the same paired accessibility, screenshot and HID services as the Mac/Linux bridge. PokiCore keeps the same control logic, approvals, action timing and typing cadence as the standard paths. Changes take effect when Poki starts again.")
+            Text("Native services is an experimental banner-free path using the same paired accessibility, screenshot and HID services as the Mac/Linux bridge. Agent typing uses verified keyboard input and Chinese candidate selection without the pasteboard. Changes take effect when Poki starts again.")
         }
         .onAppear {
             if path == AutomationPath.runner.rawValue { path = AutomationPath.nativeServices.rawValue }
-        }
-        .onDisappear {
-            let pending = imeTask
-            pending?.cancel()
-            Task {
-                await pending?.value
-                do { try await ime.ime(end: true) }
-                catch { imeStatus = "Keyboard detach failed: \(error.localizedDescription)" }
-                await ime.reset()
-            }
-        }
-    }
-
-    private func imeAction(text: String = "", key: String? = nil, end: Bool = false, read: Bool = false) {
-        imeBusy = true
-        imeStatus = "Focus the test field now…"
-        imeTask = Task { @MainActor in
-            defer { imeBusy = false }
-            do {
-                if !end { try await Task.sleep(for: .seconds(2)) }
-                try Task.checkCancellation()
-                if read {
-                    imeStatus = try await ime.imeAccessibilitySnapshot()
-                    return
-                }
-                if !end {
-                    guard probe.focusedInputLanguage != nil else {
-                        try await ime.ime(end: true)
-                        imeStatus = "Not verified: focus the test field in Poki first. Nothing typed."
-                        return
-                    }
-                    // Attaching a hardware keyboard can change the active mode.
-                    // Observe after attachment, not just before sending the command.
-                    try await ime.ime()
-                    try await Task.sleep(for: .milliseconds(250))
-                    if key == "next_input_source" {
-                        for _ in 0..<8 {
-                            try Task.checkCancellation()
-                            guard probe.focusedInputLanguage != nil else { break }
-                            if InProcessProbe.isChineseInputLanguage(probe.focusedInputLanguage) { break }
-                            try await ime.ime(key: "next_input_source")
-                            try await Task.sleep(for: .milliseconds(350))
-                        }
-                    }
-                    guard let language = probe.focusedInputLanguage,
-                          InProcessProbe.isChineseInputLanguage(language) else {
-                        try await ime.ime(end: true)
-                        imeStatus = "Chinese not verified (active: \(probe.focusedInputLanguage ?? "unknown")). No composition or candidate-selection key sent. Enable a Chinese keyboard in iOS Settings."
-                        return
-                    }
-                    if key == "next_input_source" {
-                        imeStatus = "Verified Chinese input: \(language) on the focused test field"
-                        return
-                    }
-                }
-                try await ime.ime(text: text, key: key, end: end)
-                imeStatus = end ? "Keyboard detached" : "Sent — inspect the composition and candidates"
-            } catch {
-                imeStatus = error.localizedDescription
-                do { try await ime.ime(end: true) }
-                catch { imeStatus += " · Keyboard detach failed: \(error.localizedDescription)" }
-            }
         }
     }
 }

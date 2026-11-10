@@ -7,3 +7,5 @@ build/
 .env
 .env.*
 native/launcher/target/
+native/ios-app/.contained-runtime/
+native/ios-app/PokiContained.xcodeproj/

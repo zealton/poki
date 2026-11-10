@@ -1,0 +1,128 @@
+diff --git a/LiveContainer.xcodeproj/project.pbxproj b/LiveContainer.xcodeproj/project.pbxproj
+index 777d316..d3e8772 100644
+--- a/LiveContainer.xcodeproj/project.pbxproj
++++ b/LiveContainer.xcodeproj/project.pbxproj
+@@ -176 +176 @@
+-		17554B712DA16988004C6D90 /* OpenSSL.xcframework */ = {isa = PBXFileReference; expectedSignature = "AppleDeveloperProgram:67RAULRX93:Marcin Krzyzanowski"; lastKnownFileType = wrapper.xcframework; name = OpenSSL.xcframework; path = OpenSSL/Frameworks/OpenSSL.xcframework; sourceTree = "<group>"; };
++		17554B712DA16988004C6D90 /* OpenSSL.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = OpenSSL.xcframework; path = OpenSSL/Frameworks/OpenSSL.xcframework; sourceTree = "<group>"; };
+@@ -188 +188 @@
+-		E1946AD63041BFDD005CBEDD /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk/System/Library/Frameworks/IOKit.framework; sourceTree = DEVELOPER_DIR; };
++		E1946AD63041BFDD005CBEDD /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk/System/Library/Frameworks/IOKit.framework; sourceTree = DEVELOPER_DIR; };
+@@ -1103 +1103 @@
+-				PRODUCT_BUNDLE_IDENTIFIER = com.kdt.livecontainer.SideStoreSupport;
++				PRODUCT_BUNDLE_IDENTIFIER = app.zealton.poki.workspace.SideStoreSupport;
+@@ -1145 +1145 @@
+-				PRODUCT_BUNDLE_IDENTIFIER = com.kdt.livecontainer.SideStoreSupport;
++				PRODUCT_BUNDLE_IDENTIFIER = app.zealton.poki.workspace.SideStoreSupport;
+@@ -1913 +1913 @@
+-				PRODUCT_BUNDLE_IDENTIFIER = com.kdt.livecontainer.LiveContainerShared;
++				PRODUCT_BUNDLE_IDENTIFIER = app.zealton.poki.workspace.LiveContainerShared;
+@@ -1955 +1955 @@
+-				PRODUCT_BUNDLE_IDENTIFIER = com.kdt.livecontainer.LiveContainerShared;
++				PRODUCT_BUNDLE_IDENTIFIER = app.zealton.poki.workspace.LiveContainerShared;
+diff --git a/LiveContainer/Info.plist b/LiveContainer/Info.plist
+index 41a2f30..3372705 100644
+--- a/LiveContainer/Info.plist
++++ b/LiveContainer/Info.plist
+@@ -8 +8 @@
+-	<string>LiveContainer</string>
++	<string>Poki Workspace</string>
+@@ -47 +47 @@
+-				<string>livecontainer</string>
++				<string>poki-workspace</string>
+@@ -218,8 +217,0 @@
+-		<string>bluetooth-central</string>
+-		<string>external-accessory</string>
+-		<string>fetch</string>
+-		<string>location</string>
+-		<string>nearby-interaction</string>
+-		<string>remote-notification</string>
+-		<string>voip</string>
+-		<string>processing</string>
+diff --git a/LiveContainer/LCSharedUtils.m b/LiveContainer/LCSharedUtils.m
+index 575205f..21da6c8 100644
+--- a/LiveContainer/LCSharedUtils.m
++++ b/LiveContainer/LCSharedUtils.m
+@@ -16,0 +17,3 @@ + (NSString*) teamIdentifier {
++#if TARGET_OS_SIMULATOR
++    return @"POKIWORKSPACE";
++#endif
+@@ -56,0 +60,3 @@ + (NSString *)appGroupID {
++#if TARGET_OS_SIMULATOR
++    return @"group.app.zealton.poki.workspace";
++#endif
+diff --git a/LiveContainer/Tweaks/Dyld.m b/LiveContainer/Tweaks/Dyld.m
+index 210b1a6..83eac28 100644
+--- a/LiveContainer/Tweaks/Dyld.m
++++ b/LiveContainer/Tweaks/Dyld.m
+@@ -153,0 +154 @@ void hideLiveContainerImageCallback(const struct mach_header* header, intptr_t v
++    if(!header)return NULL;
+@@ -170,0 +172 @@ void saveCachedSymbol(NSString* symbolName, mach_header_u* header, uint64_t offs
++    if(!header || !LCGetMachOUUID(header))return;
+diff --git a/LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift b/LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
+index 929b362..fd6e3ad 100644
+--- a/LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
++++ b/LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
+@@ -105 +105 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
+-            LCTabView()
++            PokiWorkspaceSurface()
+@@ -121,0 +122,10 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
++
++private struct PokiWorkspaceSurface: UIViewControllerRepresentable {
++    func makeUIViewController(context: Context) -> WorkspaceHostViewController { WorkspaceHostViewController() }
++    func updateUIViewController(_ controller: WorkspaceHostViewController, context: Context) {}
++}
++@objc(PKWManagerFactory) final class PKWManagerFactory: NSObject {
++    @objc static func controller() -> UIViewController {
++        UIHostingController(rootView: LCTabView().environmentObject(DataManager.shared.model).environmentObject(LCAppSortManager.shared))
++    }
++}
+diff --git a/LiveContainerSwiftUI/LiveContainerSwiftUI-Bridging-Header.h b/LiveContainerSwiftUI/LiveContainerSwiftUI-Bridging-Header.h
+index 82fc317..2561fef 100644
+--- a/LiveContainerSwiftUI/LiveContainerSwiftUI-Bridging-Header.h
++++ b/LiveContainerSwiftUI/LiveContainerSwiftUI-Bridging-Header.h
+@@ -20,0 +21,2 @@
++
++#import "Workspace/WorkspaceHostViewController.h"
+diff --git a/LiveProcess/main.m b/LiveProcess/main.m
+index 8d0aef3..9f6e516 100644
+--- a/LiveProcess/main.m
++++ b/LiveProcess/main.m
+@@ -61 +61 @@ int LiveProcessMain(int argc, char *argv[]) {
+-    NSLog(@"Retrieved app info: %@", appInfo);
++    NSLog(@"Contained process role=%@", appInfo[@"pokiRole"] ?: @"app");
+diff --git a/MultitaskSupport/AppSceneViewController.m b/MultitaskSupport/AppSceneViewController.m
+index 37a6137..2ad8f7b 100644
+--- a/MultitaskSupport/AppSceneViewController.m
++++ b/MultitaskSupport/AppSceneViewController.m
+@@ -7,0 +8 @@
++#import "../LiveContainerSwiftUI/Workspace/WorkspaceIPC.h"
+@@ -92,0 +94 @@ - (instancetype)initWithBundleId:(NSString*)bundleId dataUUID:(NSString*)dataUUI
++    [userInfo addEntriesFromDictionary:PKWLaunchOptions(_dataUUID) ?: @{}];
+diff --git a/TweakLoader/TweakLoader.m b/TweakLoader/TweakLoader.m
+index 6a1655a..5855fc2 100644
+--- a/TweakLoader/TweakLoader.m
++++ b/TweakLoader/TweakLoader.m
+@@ -110,0 +111,4 @@ static void TweakLoaderConstructor() {
++    // The lab probe has no Substrate dependency; upstream prebuilt device binary is absent.
++#if TARGET_OS_SIMULATOR
++    if(![NSUserDefaults.guestAppInfo[@"LabNoSubstrate"]boolValue]) {
++#endif
+@@ -116,0 +121,4 @@ static void TweakLoaderConstructor() {
++#if TARGET_OS_SIMULATOR
++    }
++#endif
++
+diff --git a/entitlements.xml b/entitlements.xml
+index bf0beb9..6f9bcd4 100644
+--- a/entitlements.xml
++++ b/entitlements.xml
+@@ -27,0 +28 @@
++		<string>$(AppIdentifierPrefix)app.zealton.poki.workspace.owner</string>
+diff --git a/xcconfigs/Global.xcconfig b/xcconfigs/Global.xcconfig
+index 98e35ff..78a4489 100644
+--- a/xcconfigs/Global.xcconfig
++++ b/xcconfigs/Global.xcconfig
+@@ -16 +16 @@ APP_GROUP_ALTSTORE = group.com.rileytestut.AltStore$(DEVELOPMENT_TEAM_SUFFIX)
+-LIVECONTAINER_BUNDLE_IDENTIFIER = com.kdt.livecontainer$(DEVELOPMENT_TEAM_SUFFIX)
++LIVECONTAINER_BUNDLE_IDENTIFIER = app.zealton.poki.workspace

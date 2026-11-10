@@ -1,0 +1,215 @@
+{
+  "environment": "Xcode 26.2 / iOS 26.2 (23C52) / iPhone 17 Pro Simulator",
+  "sameSimulatorDevice": true,
+  "model": {
+    "provider": "OpenRouter",
+    "id": "deepseek/deepseek-v4.1-flash-1017",
+    "loop": "original Poki iOS ChatModel / PiLoop / ModelKeys",
+    "hostAgentLoop": false
+  },
+  "typing": {
+    "characters": 9500,
+    "durationSeconds": 158.29730200767517,
+    "exact": true,
+    "foregroundOrFocusInterruptions": 0,
+    "focusAtEnd": true,
+    "foregroundAtEnd": true
+  },
+  "modelTasks": [
+    {
+      "task": "Safari image search and scroll",
+      "success": true,
+      "toolCalls": 11,
+      "seconds": 34.951496839523315,
+      "completedDuringTyping": true
+    },
+    {
+      "task": "Photos image viewer, Settings About and switch back",
+      "success": true,
+      "toolCalls": 11,
+      "seconds": 28.818210124969482,
+      "completedDuringTyping": true
+    }
+  ],
+  "apps": [
+    {
+      "bundle": "com.apple.mobilesafari",
+      "coldStartedDuringTyping": true,
+      "nativeGesturesDuringTyping": 4,
+      "nativeTextInsertionsDuringTyping": 1,
+      "outcome": "Pikachu forest wallpaper image grid loaded, scrolled 0 -> 692"
+    },
+    {
+      "bundle": "com.apple.mobileslideshow",
+      "coldStartedDuringTyping": true,
+      "nativeGesturesDuringTyping": 1,
+      "nativeTextInsertionsDuringTyping": 0,
+      "outcome": "Seeded Pikachu collage opened in real Photos viewer; preserved after return"
+    },
+    {
+      "bundle": "com.apple.Preferences",
+      "coldStartedDuringTyping": true,
+      "nativeGesturesDuringTyping": 2,
+      "nativeTextInsertionsDuringTyping": 0,
+      "outcome": "General > About opened; iOS 26.2 visually verified"
+    }
+  ],
+  "coldSwitchRepeat": {
+    "sequence": [
+      "Safari",
+      "Photos",
+      "Settings",
+      "Safari"
+    ],
+    "allObserved": true,
+    "characters": 1416,
+    "seconds": 23.5621280670166,
+    "exact": true,
+    "interruptions": 0
+  },
+  "selectedUnitTests": {
+    "count": 3,
+    "failures": 0
+  },
+  "physicalDeviceVerified": false,
+  "arbitraryAppCompatibilityVerified": false,
+  "chineseUserIMEVerified": false,
+  "photosLibrary": "9 images; 6 stock Simulator photos plus 3 test screenshots, including a Pikachu collage",
+  "userEditor": "independent TypingPad fixture, not Apple Notes",
+  "visualReview": true,
+  "sourceSafariBinarySHA256": "65fcdb30b82aef3a163c67650d0fdf2373fc7ab18e1be10319e75dacc5c7437c",
+  "expandedAcceptance": {
+    "date": "2026-11-10",
+    "coldLaunchMatrix": {
+      "duration": 158.29850006103516,
+      "userTextLength": 9500,
+      "userTextExact": true,
+      "interruptions": 0,
+      "longestInputGapSeconds": 0.12984895706176758,
+      "typingPassed": true,
+      "apps": [
+        "com.apple.DocumentsApp",
+        "com.apple.MobileAddressBook",
+        "com.apple.mobilecal",
+        "com.apple.reminders",
+        "com.apple.Maps",
+        "com.apple.mobilesafari",
+        "com.apple.mobileslideshow",
+        "com.apple.Preferences"
+      ],
+      "ordinaryFixtureAlsoTested": true,
+      "allExternalScenesObserved": true
+    },
+    "liveFiveAppRun": {
+      "duration": 158.29955196380615,
+      "userTextLength": 9500,
+      "userTextExact": true,
+      "interruptions": 0,
+      "longestInputGapSeconds": 0.13612794876098633,
+      "typingPassed": true,
+      "tasks": [
+        {
+          "task": "Maps landmark search/card + Reminders onboarding/empty list",
+          "toolCalls": 16,
+          "seconds": 51.19954586029053,
+          "success": true,
+          "completedDuringTyping": true
+        },
+        {
+          "task": "Files folder navigation + Quick Look verification code 8421",
+          "toolCalls": 12,
+          "seconds": 27.695656061172485,
+          "success": true,
+          "completedDuringTyping": true
+        },
+        {
+          "task": "Contacts native search/detail/company + Calendar November 11 date",
+          "toolCalls": 15,
+          "seconds": 50.37035393714905,
+          "success": true,
+          "completedDuringTyping": true
+        }
+      ],
+      "thirdTaskTrigger": "queued through the same Debug ChatModel.send trigger after the first two completed; separately checked against the same actual typing interval",
+      "apps": [
+        "com.apple.Maps",
+        "com.apple.reminders",
+        "com.apple.DocumentsApp",
+        "com.apple.MobileAddressBook",
+        "com.apple.mobilecal"
+      ],
+      "modelLoop": "original Poki in-app PiLoop, OpenRouter DeepSeek",
+      "totalToolCalls": 43
+    },
+    "transportChecks": [
+      {
+        "check": "stale_instance_rejected",
+        "ok": true
+      },
+      {
+        "check": "expired_command_rejected",
+        "ok": true
+      },
+      {
+        "check": "non_input_target_rejected",
+        "ok": true
+      },
+      {
+        "check": "one_real_button_action",
+        "ok": true
+      },
+      {
+        "check": "permission_deferred_without_grant",
+        "ok": true,
+        "before": 0,
+        "after": 0
+      },
+      {
+        "check": "restart_does_not_replay_old_action",
+        "ok": true
+      }
+    ],
+    "selectedUnitTests": {
+      "count": 6,
+      "failures": 0
+    },
+    "excludedFailures": [
+      {
+        "run": "eight-app baseline",
+        "reason": "Calendar notification authorization alert blocked the primary keyboard",
+        "expectedCharacters": 9500,
+        "actualCharacters": 8000,
+        "longestInputGapSeconds": 25.04,
+        "focusEventsAloneMissedIt": true
+      },
+      {
+        "run": "early live A/C",
+        "reason": "OpenRouter requests timed out or lost connection; no completion, excluded"
+      },
+      {
+        "run": "early live B",
+        "reason": "model repeated endX instead of tap x; rejected actions and no task completion, excluded"
+      },
+      {
+        "run": "first Files setup",
+        "reason": "Poki sandbox sample was not exposed in Files; switched to the disposable fixture document provider"
+      }
+    ],
+    "fixes": [
+      "choose active full-size external window instead of background widget",
+      "defer notification permission requests during isolated automation without granting authorization",
+      "discover prepared apps and use checked semantic control references",
+      "separate press/tap/type tools to avoid ambiguous arguments",
+      "wait for layout and use terminal action receipts",
+      "reject expired commands and previous-process commands; restart never replays actions",
+      "restore ordinary keyboard behavior and reject external actions when the owner uses that same app on the primary display",
+      "check exact input plus inter-key gaps, not only focus/lifecycle events"
+    ],
+    "notes": [
+      "Eight system apps have cold-launch coverage; five have additional functional model coverage in this revision.",
+      "Earlier Safari/Photos/Settings functional acceptance remains documented above.",
+      "All typing uses independent TypingPad with English/digit input, not Apple Notes or Chinese IME.",
+      "Not a stock-iPhone or arbitrary-third-party-app compatibility claim."
+    ]
+  }
+}

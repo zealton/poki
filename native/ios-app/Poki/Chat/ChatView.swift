@@ -29,6 +29,18 @@ struct ChatView: View {
         // The header and the message field are insets of the conversation, so the field sits right on
         // the keyboard (or the home indicator) and the bubbles scroll under both, as in Messages.
         .safeAreaInset(edge: .top, spacing: 0) {
+            AgentExecutionToggle()
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                .background(Color(uiColor: .secondarySystemBackground))
+            if chat.containedSafari { ContainedSafariPreview().frame(height: 250) }
+            if chat.carPlay, let image = CarPlayWorkspace.shared.preview {
+                VStack(spacing: 4) {
+                    Image(uiImage: image).resizable().scaledToFit().frame(height: 220)
+                        .accessibilityLabel("Agent's CarPlay display")
+                    Text("Agent preview").font(.caption).foregroundStyle(.secondary)
+                }.frame(maxWidth: .infinity).padding(.vertical, 6)
+                    .background(Color(uiColor: .secondarySystemBackground))
+            }
             if voice.isOn { LiveVoiceBar(voice: voice).transition(.move(edge: .top).combined(with: .opacity)) }
         }
         .animation(.snappy, value: voice.isOn)
@@ -91,7 +103,7 @@ struct ChatView: View {
 
     /// Setup is not finished (nothing paired yet, or a step left after pairing, such as UI Automation):
     /// the chat says so, one tap from setup, as the old Home's Setup row did.
-    private var needsSetup: Bool { (model.pairingPath == nil || model.setupStepsLeft) && !model.sessionOn && !chat.running && !chat.isSample }
+    private var needsSetup: Bool { !chat.containedSafari && !chat.carPlay && (model.pairingPath == nil || model.setupStepsLeft) && !model.sessionOn && !chat.running && !chat.isSample }
 }
 
 /// The bubbles of one conversation: an in-app chat, a hand-off from an outside agent, or an outside
@@ -471,6 +483,7 @@ struct ComposerInputView: View {
             HStack(alignment: .bottom, spacing: 8) {
                 HStack(alignment: .bottom, spacing: 4) {
                     TextField(text: $input, prompt: Text(dictation.on ? "Listening…" : "Message Poki").foregroundStyle(ChatColor.placeholder), axis: .vertical) { Text("Message Poki") }
+                        .accessibilityIdentifier("poki.chat.input")
                         .font(.system(size: 17))
                         .focused($focused)
                         .multilineTextAlignment(.leading)
@@ -514,6 +527,7 @@ struct ComposerInputView: View {
                         Image(systemName: "arrow.up.circle.fill").resizable().scaledToFit().frame(width: 30, height: 30).foregroundStyle(.white, Site.blue)
                     }
                     .accessibilityLabel(Text("Send"))
+                    .accessibilityIdentifier("poki.chat.send")
                 } else {
                     // The live voice conversation: Poki listens and answers out loud. It ends 8 s after an answer if nobody speaks, in the background, or when you end it.
                     Button {

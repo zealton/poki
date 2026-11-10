@@ -43,7 +43,7 @@ struct LockScreenCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             StatusRow(face: face, surface: .lockScreen)
-            ContentRow(face: face)
+            AgentOperationContent(face: face)
             StepBar(face: face, surface: .lockScreen)
             ActionRow(face: face, surface: .lockScreen)
         }
@@ -72,6 +72,7 @@ private struct StatusRow: View {
             Spacer(minLength: 8)
             MetaView(meta: face.meta, surface: surface)
             if let caller = face.caller { CallerBadge(name: caller, size: 20) }
+            if face.showsAgentTrace, face.bottom == .stop { StopButton() }
         }
     }
 }
@@ -83,7 +84,7 @@ private struct ContentRow: View {
         HStack(alignment: .center, spacing: 12) {
             ContentLine(face: face)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            if face.bottom == .stop { StopButton().transition(.opacity) }
+            if face.bottom == .stop, !face.showsAgentTrace { StopButton().transition(.opacity) }
         }
     }
 }
@@ -94,12 +95,13 @@ private struct ContentLine: View {
     private let theme = ActivityTheme.current
     var body: some View {
         Text(face.content)
-            .font(face.contentIsCode ? theme.content.monospacedDigit().weight(.bold) : theme.content)
+            .font(face.contentIsCode ? theme.content.monospacedDigit().weight(.bold) : !face.showsAgentTrace ? theme.content : .system(size: 15, weight: .semibold))
             .foregroundStyle(face.stale ? AnyShapeStyle(HierarchicalShapeStyle.secondary) : AnyShapeStyle(HierarchicalShapeStyle.primary))
-            .lineLimit(face.contentIsCode ? 1 : 2)
+            .lineLimit(face.contentIsCode || face.showsAgentTrace ? 1 : 2)
             .minimumScaleFactor(0.85)
             .fixedSize(horizontal: false, vertical: true)
             .contentTransition(face.contentIsCode ? .numericText() : .interpolate)
+            .privacySensitive(face.agentTask != nil)
     }
 }
 
@@ -159,6 +161,7 @@ struct IslandTrailing: View {
         HStack(spacing: 6) {
             MetaView(meta: face.meta, surface: .island)
             if let caller = face.caller { CallerBadge(name: caller, size: 20) }
+            if face.showsAgentTrace, face.bottom == .stop { StopButton() }
         }
             .padding(.trailing, ActivityMetrics.islandRowInset)
             .frame(maxHeight: .infinity, alignment: .center)
@@ -172,7 +175,7 @@ struct IslandBottom: View {
     @Environment(\.isLuminanceReduced) private var dimmed
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ContentRow(face: face)
+            AgentOperationContent(face: face)
             StepBar(face: face, surface: .island)
             ActionRow(face: face, surface: .island)
         }
@@ -180,6 +183,67 @@ struct IslandBottom: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .environment(\.colorScheme, .dark)
         .animation(dimmed ? nil : ActivityMotion.phase, value: face)
+    }
+}
+
+/// The expanded island and Lock Screen share the same latest captured frame and bounded trace.
+/// Image updates follow actual observations; no video stream or network fetch runs in the widget.
+private struct AgentOperationContent: View {
+    var face: ActivityFace
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            if face.hasSnapshot, face.showsAgentTrace {
+                VStack(alignment: .leading, spacing: 3) {
+                    ActivitySnapshot(id: face.snapshotID)
+                        .frame(width: 70, height: 70)
+                        .background(.black.opacity(0.12), in: .rect(cornerRadius: 10))
+                        .clipShape(.rect(cornerRadius: 10))
+                        .privacySensitive()
+                }
+                .accessibilityLabel(Text(String(activity: "Latest screen")))
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                ContentRow(face: face)
+                if let task = face.agentTask, face.showsAgentTrace {
+                    HStack(spacing: 5) {
+                        Image(systemName: task.background ? "rectangle.on.rectangle" : "iphone")
+                        Text(task.background ? String(activity: "Background") : String(activity: "On screen"))
+                        if let current = task.current, let total = task.total {
+                            Text("· \(current)/\(total)").monospacedDigit()
+                        }
+                        if task.active, task.thinking { Image(systemName: "ellipsis").accessibilityLabel(Text(String(activity: "Thinking"))) }
+                        if let at = face.snapshotAt {
+                            Text("·")
+                            Text(at, format: .dateTime.hour().minute().second())
+                                .font(.system(size: 9).monospacedDigit())
+                        }
+                    }
+                    .font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary).lineLimit(1)
+                    ForEach(Array(task.steps.enumerated()), id: \.offset) { _, step in
+                        HStack(spacing: 5) {
+                            Image(systemName: symbol(step.status)).font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(step.status == .failed ? Color.orange : Color.secondary)
+                            Text(step.title).font(.system(size: 10)).lineLimit(1)
+                        }
+                        .foregroundStyle(.secondary).privacySensitive()
+                    }
+                }
+            }
+        }
+    }
+    private func symbol(_ state: PokiActivityAttributes.AgentTask.Step.Status) -> String {
+        switch state { case .running: "arrow.triangle.2.circlepath"; case .done: "checkmark"; case .failed: "exclamationmark"; case .stopped: "minus" }
+    }
+}
+
+private struct ActivitySnapshot: View {
+    var id: String?
+    var body: some View {
+        if let image = ((id == nil ? SharedContainer.thumbnailURL : SharedContainer.snapshotURL(id)).flatMap { UIImage(contentsOfFile: $0.path) }) ?? Thumbnail.previewImage {
+            Image(uiImage: image).resizable().scaledToFit().id(id)
+        } else {
+            Image(systemName: "photo").foregroundStyle(.secondary)
+        }
     }
 }
 

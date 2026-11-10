@@ -18,6 +18,36 @@ unchanged. Its state, screenshot and input lanes remain connected independently 
 Diagnostics path comparison records tap, type, swipe and parallel tree/screenshot timings against
 the in-process path. Changing paths takes effect on the next app launch.
 
+### This fork: OpenRouter in the original Poki app
+
+New installations select **OpenRouter → DeepSeek V4.1 Flash**
+(`deepseek/deepseek-v4.1-flash-1017`). Add the owner's OpenRouter key in **Agents → Accounts →
+OpenRouter**. This is the original Poki chat, PiLoop and PokiCore `look` / `do` tool pipeline,
+including launching installed apps such as system Safari. Chat, session titles and the optional
+approval classifier all use that selected account. Existing saved account and model choices are
+preserved. No key is embedded in the source or build, and the OpenRouter key is sent only to
+OpenRouter. Model metadata was checked against [OpenRouter's model API](https://openrouter.ai/api/v1/models).
+
+With only this account configured, voice uses Apple's dictation, the same chat model, and system
+speech synthesis. OpenAI Realtime remains an optional feature requiring its own supported account;
+an OpenRouter key is never sent to OpenAI's Realtime endpoint.
+
+The separate `native/ios-workspace` target is an **isolation experiment**, not a replacement for
+Poki and not proof of system Safari operating concurrently with Notes. The original launch action
+brings the target app to the foreground. Preserving that capability does not establish independent
+foreground/keyboard isolation; that scenario must be measured separately.
+
+Debug Simulator acceptance can run `-pokiInProcess chat-openrouter -pokiProbeTask "TASK"` with
+the real selected OpenRouter model and original phone tools. Provision through the UI or the
+explicit `POKI_TEST_CREDENTIAL_FIFO` channel: a same-user FIFO with mode 0600 carrying one JSON object
+(`provider`, optional `model`, `secret`), read once into Keychain. Its environment variable contains
+only the FIFO path. Never put a key in launch arguments, environment values, XCTest text input,
+logs, or a plaintext credential file. The FIFO channel is absent from device/release builds.
+Probe results are written to `Documents/inprocess-probe.json`; normal Sessions retain tool receipts.
+If a Debug Simulator has no Keychain entitlement, model credentials stay in process memory only,
+and Accounts explicitly says to re-enter them after Poki exits. There is no plaintext persistence
+fallback. Device/release builds require a successful Keychain write.
+
 ## Layout
 
 | Path | What |

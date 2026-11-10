@@ -1,0 +1,15 @@
+# Experimental Simulator-only composition. Run scripts/build-contained.py first.
+include: project-external.yml
+name: PokiContained
+targets:
+  Poki:
+    sources:
+      - path: .contained-runtime/ContainedResources
+        type: folder
+    dependencies:
+      - framework: .contained-runtime/LiveContainerSwiftUI.framework
+        embed: true
+      - framework: .contained-runtime/LiveContainerShared.framework
+        embed: true
+      - framework: .contained-runtime/OpenSSL.framework
+        embed: true

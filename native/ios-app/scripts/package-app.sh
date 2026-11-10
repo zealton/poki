@@ -18,7 +18,7 @@ app, edition, version, build = pathlib.Path(sys.argv[1]), *sys.argv[2:]
 if edition not in ('local', 'external'):
     raise SystemExit('Expected local or external connection edition')
 extensions = {p.name for p in (app / 'PlugIns').glob('*.appex')}
-expected = {'PokiWidgets.appex'} | ({'PokiTunnel.appex'} if edition == 'local' else set())
+expected = {'PokiWidgets.appex', 'PokiKeyboard.appex'} | ({'PokiTunnel.appex'} if edition == 'local' else set())
 if extensions != expected:
     raise SystemExit(f'Wrong extensions for {edition}: {sorted(extensions)}')
 if edition == 'local':

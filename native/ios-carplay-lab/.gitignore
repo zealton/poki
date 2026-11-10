@@ -1,0 +1,9 @@
+*-path.txt
+*.log
+.lab-state.json
+client-config.json
+coordinator/
+evidence/
+driver/*.xcodeproj/
+__pycache__/
+driver/__pycache__/

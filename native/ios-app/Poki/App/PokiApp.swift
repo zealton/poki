@@ -125,7 +125,8 @@ struct RootView: View {
         }
     }
 
-    var body: some View {
+    // Keep the tab content and alert chains in separate expressions for Xcode 26.2's type checker.
+    private var tabs: some View {
         TabView(selection: $tab) {
             Tab(String(localized: "Poki"), systemImage: "bubble.left.and.bubble.right.fill", value: RootTab.chats) { pokiTab }
 
@@ -145,6 +146,10 @@ struct RootView: View {
                 Tab(String(localized: "New Chat"), systemImage: "square.and.pencil", value: RootTab.newChat, role: .search) { Color.clear }
             }
         }
+    }
+
+    private var navigation: some View {
+        tabs
         .onChange(of: tab) { old, new in
             // Leaving the Poki tab from a conversation (to Accounts, Setup, a connector): the Poki
             // tab is back at Sessions, with its tab bar, when you come back. Done without animation
@@ -159,6 +164,10 @@ struct RootView: View {
             show(HomeRoute.chat)
         }
         .task { InProcessProbe.shared.startFromLaunchArguments(model: model) }
+    }
+
+    private var connectionAlerts: some View {
+        navigation
         .alert(model.connectionAsk.map { String(localized: "Allow \($0.client) to connect?") } ?? "",
                isPresented: Binding(get: { model.connectionAsk != nil }, set: { if !$0 { model.answerConnection(false) } }),
                presenting: model.connectionAsk) { _ in
@@ -173,6 +182,10 @@ struct RootView: View {
         } message: {
             Text("The update is almost in. Poki will close to finish it; open Poki again afterwards.")
         }
+    }
+
+    private var automationAlerts: some View {
+        connectionAlerts
         // Turning on after Off: Poki exits by itself and has to be opened again.
         .alert("Poki Restarts to Turn On", isPresented: Binding(get: { model.relaunchNotice }, set: { if !$0 { model.relaunchNotice = false } })) {
             Button("Cancel", role: .cancel) { model.relaunchNotice = false }
@@ -180,13 +193,11 @@ struct RootView: View {
         } message: {
             Text("Poki closes by itself so agents can see the screen again. Open Poki again afterwards, from the notification or the Home Screen; it turns on when it opens.")
         }
-        // Before the first automation after a restart: iOS's passcode screen is next, and expected.
-        .alert("Enter Your Passcode Next", isPresented: Binding(get: { model.passcodeHeadsUp }, set: { if !$0 { model.passcodeHeadsUp = false } })) {
-            Button("Cancel", role: .cancel) { model.passcodeHeadsUp = false }
-            Button("Continue") { model.continueAfterPasscodeHeadsUp() }
-        } message: {
-            Text("This is the first time Poki starts automation since your iPhone restarted, so iOS will ask for your passcode on the next screen. That screen belongs to iOS: Poki can’t see or read what you enter, and it asks only once until the next restart.")
-        }
+
+    }
+
+    var body: some View {
+        automationAlerts
         .onChange(of: scenePhase, initial: true) { _, phase in
             if phase == .active { model.becameActive(); AskPoki.refresh(); model.startSigner(); model.signer.maintain(); Task { await model.verifyPairing() } } else if phase == .background { model.wentToBackground() }
         }

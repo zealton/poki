@@ -36,7 +36,8 @@ const fail = (kind, message) => { throw Object.assign(new Error(message), { kind
 
 const facts = () => ({ name: phoneName, ios: '27.1', product_type: 'iPhone17,1', developer_mode: record !== null, paired_with_this_computer: scenario === 'paired' || installCalls > 0, wifi_address: '192.168.1.44' });
 
-async function install() {
+async function install({ ipa } = {}) {
+  if (process.env.POKI_FAKE_EXPECT_IPA && ipa !== process.env.POKI_FAKE_EXPECT_IPA) fail('bad_request', 'The requested local IPA was not passed to the signing flow.');
   installCalls += 1;
   if (!signedIn) fail('needs_person', 'Sign in with your Apple ID first.');
   progress({ kind: 'step', id: 'phone', title: 'Finding the iPhone' });

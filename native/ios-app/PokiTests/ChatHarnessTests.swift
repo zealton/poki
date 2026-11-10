@@ -12,33 +12,151 @@ final class ChatHarnessTests: XCTestCase {
     private var saved: [String: Any?] = [:]
     private var app: AppModel?
     private var notes: [String] = []
+    private var executionSuite = ""
+    private var executionSettings: AgentExecutionSettings!
     private static let settings = ["chat.provider", "chat.customURL", "chat.customModel"]
 
     override func setUp() async throws {
         for key in Self.settings { saved[key] = UserDefaults.standard.object(forKey: key) }
+        executionSuite = "PokiExecutionTests." + UUID().uuidString
+        executionSettings = AgentExecutionSettings(defaults: UserDefaults(suiteName: executionSuite)!)
     }
 
     override func tearDown() async throws {
         for key in Self.settings { UserDefaults.standard.set(saved[key] ?? nil, forKey: key) }
         for text in notes { _ = await app?.runTool("routines", arguments: Self.json(["action": "forget_note", "id": text])) }
         ChatModel.afterTask = nil
+        UserDefaults.standard.removePersistentDomain(forName: executionSuite)
     }
 
     /// A conversation handed over by an outside agent, on the fake endpoint. The phone's tools answer
     /// without a session (the Debug probe's call), so routines reaches the app's own memory.
-    private func chat(on server: FakeCompletions) -> ChatModel {
+    private func chat(on server: FakeCompletions, background: Bool = false) -> ChatModel {
         ModelKeys.customURL = "http://127.0.0.1:\(server.port)/v1"
         ModelKeys.customModel = "fake-model"
         ModelKeys.selectedProvider = .custom
         let app = AppModel(launcher: FakeLauncher(), pairer: FakePairing())
         app.inProcessReadyForProbe()
         self.app = app
-        return ChatModel(app: app, kind: .handoff, requester: "Test agent")
+        executionSettings.setBackgroundEnabled(background)
+        return ChatModel(app: app, kind: .handoff, requester: "Test agent", executionSettings: executionSettings)
     }
+
+    func testBackgroundPreferenceDefaultsOnPersistsAndIsShared() {
+        XCTAssertTrue(executionSettings.backgroundEnabled)
+        let app = AppModel(launcher: FakeLauncher(), pairer: FakePairing())
+        let first = ChatModel(app: app, kind: .handoff, executionSettings: executionSettings)
+        let other = ChatModel(app: app, kind: .handoff, executionSettings: executionSettings)
+        first.setCarPlay(false)
+        XCTAssertFalse(other.carPlay)
+        let restored = AgentExecutionSettings(defaults: UserDefaults(suiteName: executionSuite)!)
+        XCTAssertFalse(restored.backgroundEnabled, "Explicit Off must survive recreating the settings")
+        first.setCarPlay(true)
+        XCTAssertTrue(other.carPlay)
+        XCTAssertTrue(AgentExecutionSettings(defaults: UserDefaults(suiteName: executionSuite)!).backgroundEnabled)
+    }
+
+    func testExecutionModeCannotChangeWhileAnotherTaskIsRunning() {
+        let task = UUID()
+        let app = AppModel(launcher: FakeLauncher(), pairer: FakePairing())
+        let chat = ChatModel(app: app, kind: .handoff, executionSettings: executionSettings)
+        executionSettings.setRunning(true, task: task)
+        XCTAssertFalse(chat.canChangeExecutionMode)
+        chat.setCarPlay(false)
+        XCTAssertTrue(chat.carPlay, "The UI and model must reject an in-flight mode change")
+        executionSettings.setRunning(false, task: task)
+        chat.setCarPlay(false)
+        XCTAssertFalse(chat.carPlay)
+    }
+
+    #if DEBUG && targetEnvironment(simulator)
+    func testBackgroundUnavailableStopsBeforeModelRequest() async throws {
+        let prior = ProcessInfo.processInfo.environment["POKI_CARPLAY_CONFIG"]
+        unsetenv("POKI_CARPLAY_CONFIG")
+        defer { if let prior { setenv("POKI_CARPLAY_CONFIG", prior, 1) } }
+        let server = try FakeCompletions(replies: [FakeCompletions.text("Must not be requested")])
+        let chat = chat(on: server, background: true)
+        let result = await chat.runDelegated("This task must not fall back to foreground input")
+        XCTAssertTrue(server.requests.isEmpty)
+        XCTAssertTrue(chat.calls.isEmpty)
+        XCTAssertTrue(result.text.contains("Background execution is not available"), result.text)
+        XCTAssertTrue(chat.carPlay)
+        XCTAssertTrue(chat.canChangeExecutionMode)
+    }
+
+    func testExecutionSwitchSelectsToolsAndResetsContextWithoutErasingTranscript() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+        try Data(Self.json(["targets": [:]]).utf8).write(to: path)
+        let prior = ProcessInfo.processInfo.environment["POKI_CARPLAY_CONFIG"]
+        setenv("POKI_CARPLAY_CONFIG", path.path, 1)
+        defer {
+            if let prior { setenv("POKI_CARPLAY_CONFIG", prior, 1) } else { unsetenv("POKI_CARPLAY_CONFIG") }
+            try? FileManager.default.removeItem(at: path)
+        }
+        let finish = FakeCompletions.tool("finish_task", ["success": true, "summary": "Done", "details": [], "answer": ["kind": "action"]])
+        let backgroundFinish = FakeCompletions.tool("finish_task", ["success": true, "summary": "Done", "details": []])
+        let server = try FakeCompletions(replies: [finish, FakeCompletions.text("First finished"), backgroundFinish,
+                                                  FakeCompletions.text("Second finished"), finish, FakeCompletions.text("Third finished")])
+        let chat = chat(on: server)
+        _ = await chat.runDelegated("Foreground request unique alpha")
+        let count = chat.entries.count
+        chat.setCarPlay(true)
+        XCTAssertEqual(chat.entries.count, count)
+        _ = await chat.runDelegated("Background request unique beta")
+        chat.setCarPlay(false)
+        _ = await chat.runDelegated("Original mode unique gamma")
+        let requests = server.requests
+        XCTAssertEqual(requests.count, 6)
+        guard requests.count == 6 else { return }
+        func tools(_ index: Int) -> Set<String> {
+            Set((requests[index]["tools"] as? [[String: Any]] ?? []).compactMap { ($0["function"] as? [String: Any])?["name"] as? String })
+        }
+        XCTAssertTrue(tools(0).contains("do"))
+        XCTAssertFalse(tools(0).contains("carplay_open"))
+        XCTAssertTrue(tools(2).contains("carplay_open"))
+        XCTAssertFalse(tools(2).contains("do"))
+        XCTAssertTrue(tools(4).contains("do"))
+        XCTAssertFalse(tools(4).contains("carplay_open"))
+        XCTAssertFalse(Self.json(requests[2]).contains("unique alpha"))
+        XCTAssertFalse(Self.json(requests[4]).contains("unique beta"))
+        XCTAssertTrue(chat.canChangeExecutionMode)
+    }
+    #endif
 
     private static func json(_ object: [String: Any]) -> String {
         String(decoding: try! JSONSerialization.data(withJSONObject: object), as: UTF8.self)
     }
+
+    #if DEBUG && targetEnvironment(simulator)
+    /// An isolated model cannot open an unprepared app by falling back to the
+    /// whole-phone runner. Exercise the real ChatModel/backend dispatch.
+    func testCarPlayRejectsUnpreparedAppsWithoutForegroundFallback() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+        try Data(Self.json(["targets": [:]]).utf8).write(to: path)
+        let prior = ProcessInfo.processInfo.environment["POKI_CARPLAY_CONFIG"]
+        setenv("POKI_CARPLAY_CONFIG", path.path, 1)
+        defer {
+            if let prior { setenv("POKI_CARPLAY_CONFIG", prior, 1) } else { unsetenv("POKI_CARPLAY_CONFIG") }
+            try? FileManager.default.removeItem(at: path)
+        }
+        let server = try FakeCompletions(replies: [
+            FakeCompletions.tool("carplay_open", ["bundle": "com.apple.Preferences"]),
+            FakeCompletions.tool("finish_task", ["success": false, "summary": "Unsupported global action blocked."]),
+            FakeCompletions.text("Stopped without foreground control.")
+        ])
+        let chat = chat(on: server)
+        chat.setCarPlay(true)
+        let result = await chat.runDelegated("Open an unprepared app.")
+        XCTAssertEqual(result.success, false, result.text)
+        XCTAssertTrue(chat.calls.contains { $0.name == "carplay_open" && !$0.ok && $0.answer.contains("not in the prepared CarPlay allowlist") })
+        let first = try XCTUnwrap(server.requests.first)
+        let tools = first["tools"] as? [[String: Any]] ?? []
+        let names = tools.compactMap { ($0["function"] as? [String: Any])?["name"] as? String }
+        XCTAssertTrue(names.contains("carplay_open"))
+        XCTAssertFalse(names.contains("do"))
+        XCTAssertFalse(names.contains("container_do"))
+    }
+    #endif
 
     /// A note the agent saved during one task reaches the model with the next task of the same
     /// conversation.

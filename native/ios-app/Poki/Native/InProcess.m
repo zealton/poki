@@ -1081,6 +1081,8 @@ static NSString *PKDaemonReply(NSTimeInterval seconds, void (^send)(void (^)(NSE
                              @"/System/Developer/usr/lib/lib_TestingInterop.dylib",
                              @"/System/Developer/Library/PrivateFrameworks/XCTestCore.framework/XCTestCore",
                              @"/System/Developer/Library/Frameworks/XCUIAutomation.framework/XCUIAutomation"]) {
+        if ([path.lastPathComponent isEqualToString:@"lib_TestingInterop.dylib"] &&
+            ![NSFileManager.defaultManager fileExistsAtPath:path]) continue;
         if (!dlopen(path.UTF8String, RTLD_NOW | RTLD_GLOBAL)) { out[@"code"] = @"developer_framework_unavailable"; return out; }
     }
     Class cls = NSClassFromString(@"XCTRunnerDaemonSession");

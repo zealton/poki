@@ -12,7 +12,7 @@ enum ModelCatalog {
         case .openai, .chatgpt: ["gpt-6.1-terra"]
         case .deepseek: ["deepseek-flash"]
         case .gemini: ["gemini-3.8-flash"]
-        case .openrouter: ["anthropic/claude-sonnet-5.5", "google/gemini-3.8-flash"]
+        case .openrouter: [OpenRouterDefaults.modelID]
         case .custom: Set(provider.models.map(\.id))
         }
     }
